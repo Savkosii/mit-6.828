@@ -139,10 +139,6 @@ mon_vmmaps(int argc, char **argv, struct Trapframe *tf)
             }
             cprintf("%08x %08x %08x %08x %08x%5s\n", va, pdx, ptx, pgoff, pa, perm);
         }
-        // avoid overflow
-        if (va + PGSIZE < va) {
-            break;
-        }
         if (va <= end && off_start) {
             off_start = 0;
             va = ROUNDDOWN(va, PGSIZE);
@@ -150,6 +146,10 @@ mon_vmmaps(int argc, char **argv, struct Trapframe *tf)
         if (va + PGSIZE > end && off_end && start != end) {
             off_end = 0;
             va = end - PGSIZE;
+        }
+        // in case of int overflow
+        if (va + PGSIZE < va) {
+            break;
         }
     }
 	return 0;
@@ -212,6 +212,10 @@ mon_dump(int argc, char **argv, struct Trapframe *tf)
         return -1;
     }
     uint32_t end = p + count;
+    if (end < p) {
+        cprintf("dump: address overflow\n");
+        return -1;
+    }
     if (end >= npages * PGSIZE && p < npages * PGSIZE) {
         cprintf("dump: invalid physical memory range\n");
         return -1;
@@ -232,11 +236,11 @@ mon_dump(int argc, char **argv, struct Trapframe *tf)
                 return 0;
             }
         }
-        // if there is no physical memory mapped by virtural address p + k, 
-        // then dumping k + 1 bytes at p should trigger error
         if (printed) {
             cprintf("\n");
         }
+        // if there is no physical memory mapped by virtural address p + k, 
+        // then dumping k + 1 bytes at p should trigger error
         cprintf("dump: invalid address %08x\n", p);
         return -1;
     }

@@ -64,7 +64,35 @@ trap_init(void)
 {
 	extern struct Segdesc gdt[];
 
+    void (*handler[])(void) = {
+        HANDLER_DIVIDE,
+        HANDLER_DEBUG,
+        HANDLER_NMI,
+        HANDLER_BRKPT,
+        HANDLER_OFLOW,
+        HANDLER_BOUND,
+        HANDLER_ILLOP,
+        HANDLER_DEVICE,
+        HANDLER_DBLFLT,
+        HANDLER_COPROC,
+        HANDLER_TSS,
+        HANDLER_SEGNP,
+        HANDLER_STACK,
+        HANDLER_GPFLT,
+        HANDLER_PGFLT,
+        HANDLER_RES,
+        HANDLER_FPERR,
+        HANDLER_ALIGN,
+        HANDLER_MCHK,
+        HANDLER_SIMDERR,
+    };
+
 	// LAB 3: Your code here.
+    for (size_t i = 0; i < 256; i++) {
+        if (i < 20) {
+            SETGATE(idt[i], 0, 1 << 3, handler[i], 0);
+        }
+    }
 
 	// Per-CPU setup 
 	trap_init_percpu();
@@ -158,6 +186,7 @@ trap_dispatch(struct Trapframe *tf)
 void
 trap(struct Trapframe *tf)
 {
+    cprintf("tf: %x\n", tf);
 	// The environment may have set DF and some versions
 	// of GCC rely on DF being clear
 	asm volatile("cld" ::: "cc");
