@@ -82,6 +82,7 @@ pa2page(physaddr_t pa)
 	return &pages[PGNUM(pa)];
 }
 
+// map PageInfo struct to the correpsonding page vitural address
 static inline void*
 page2kva(struct PageInfo *pp)
 {
