@@ -64,7 +64,7 @@ trap_init(void)
 {
 	extern struct Segdesc gdt[];
 
-    void (*handler[])(void) = {
+    void (*handler[256])(void) = {
         HANDLER_DIVIDE,
         HANDLER_DEBUG,
         HANDLER_NMI,
@@ -85,6 +85,8 @@ trap_init(void)
         HANDLER_ALIGN,
         HANDLER_MCHK,
         HANDLER_SIMDERR,
+
+        [48] = HANDLER_SYSCALL,
     };
 
 	// LAB 3: Your code here.
@@ -93,6 +95,10 @@ trap_init(void)
             SETGATE(idt[i], 0, 1 << 3, handler[i], 0);
         }
     }
+    // int 0x3 will generate a general protection fault if DPL is 0, 
+    // or a break point exception if DPL is 3
+    SETGATE(idt[3], 0, 1 << 3, handler[3], 3);
+    SETGATE(idt[48], 0, 1 << 3, handler[48], 3);
 
 	// Per-CPU setup 
 	trap_init_percpu();
@@ -172,6 +178,28 @@ trap_dispatch(struct Trapframe *tf)
 {
 	// Handle processor exceptions.
 	// LAB 3: Your code here.
+    if (tf->tf_trapno == T_PGFLT) {
+        page_fault_handler(tf);
+        return;
+
+    } else if (tf->tf_trapno == T_BRKPT) {
+        monitor(tf);
+        return;
+
+    } else if (tf->tf_trapno == T_SYSCALL) {
+        uint32_t syscallno, ret;
+        uint32_t a1, a2, a3, a4, a5;
+        syscallno = tf->tf_regs.reg_eax;
+        a1 = tf->tf_regs.reg_edx;
+        a2 = tf->tf_regs.reg_ecx;
+        a3 = tf->tf_regs.reg_ebx;
+        a4 = tf->tf_regs.reg_edi;
+        a5 = tf->tf_regs.reg_esi;
+        ret = syscall(syscallno, a1, a2, a3, a4, a5);
+        // save the return value in trapframe instead of the register itself.
+        tf->tf_regs.reg_eax = ret;
+        return;
+    }
 
 	// Unexpected trap: The user process or the kernel has a bug.
 	print_trapframe(tf);
@@ -234,6 +262,10 @@ page_fault_handler(struct Trapframe *tf)
 	// Handle kernel-mode page faults.
 
 	// LAB 3: Your code here.
+    if (tf->tf_cs == GD_KT) {
+        panic("[%08x] kernel fault va %08x ip %08x\n", 
+              curenv->env_id, fault_va, tf->tf_eip);
+    }
 
 	// We've already handled kernel-mode exceptions, so if we get here,
 	// the page fault happened in user mode.

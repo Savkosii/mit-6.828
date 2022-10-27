@@ -41,4 +41,6 @@ void HANDLER_ALIGN(void);
 void HANDLER_MCHK(void);
 void HANDLER_SIMDERR(void);
 
+void HANDLER_SYSCALL(void);
+
 #endif /* JOS_KERN_TRAP_H */

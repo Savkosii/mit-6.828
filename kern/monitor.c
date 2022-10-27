@@ -306,8 +306,13 @@ monitor(struct Trapframe *tf)
 	cprintf("Welcome to the JOS kernel monitor!\n");
 	cprintf("Type 'help' for a list of commands.\n");
 
-	if (tf != NULL)
+	if (tf != NULL) {
 		print_trapframe(tf);
+        if (tf->tf_trapno == T_BRKPT) {
+
+        }
+    }
+    
 
 	while (1) {
 		buf = readline("K> ");

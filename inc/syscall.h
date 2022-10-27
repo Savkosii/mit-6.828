@@ -7,7 +7,7 @@ enum {
 	SYS_cgetc,
 	SYS_getenvid,
 	SYS_env_destroy,
-	NSYSCALLS
+	NSYSCALLS // stores the number of valid syscalls
 };
 
 #endif /* !JOS_INC_SYSCALL_H */
