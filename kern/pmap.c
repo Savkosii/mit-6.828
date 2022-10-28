@@ -1,5 +1,6 @@
 /* See COPYRIGHT for copyright information. */
 
+#include "cpu.h"
 #include <inc/x86.h>
 #include <inc/mmu.h>
 #include <inc/error.h>
@@ -285,6 +286,13 @@ mem_init_mp(void)
 	//     Permissions: kernel RW, user NONE
 	//
 	// LAB 4: Your code here:
+    for (size_t i = 0; i < NCPU; i++) {
+        void *this_kstacktop = (void *)KSTACKTOP - i  * (KSTKSIZE + KSTKGAP);
+        for (size_t off = 0; off < KSTKSIZE; off += PGSIZE) {
+            page_insert(kern_pgdir, pa2page(PADDR(percpu_kstacks[i]) + off), 
+                       this_kstacktop - KSTKSIZE + off, PTE_W | PTE_P);
+        }
+    }
 
 }
 
@@ -324,7 +332,7 @@ page_init(void)
 	// Change the code to reflect this.
 	// NB: DO NOT actually touch the physical memory corresponding to
 	// free pages!
-    void *pnextfree = (void *)PADDR(boot_alloc(0));
+    physaddr_t pnextfree = PADDR(boot_alloc(0));
 	for (size_t i = 0; i < npages; i++) {
         if (i == 0) {
             pages[0].pp_ref = 1;
@@ -333,6 +341,10 @@ page_init(void)
         // [IOPHYSEM, EXTPHYSMEM): the IO "hole"
         // [EXTPHYSMEM + 0xc, pnextfree): used by kernel
         if (i >= PGNUM(IOPHYSMEM) && i < PGNUM(pnextfree)) {
+            pages[i].pp_ref = 1;
+            continue;
+        }
+        if (i == PGNUM(MPENTRY_PADDR)) {
             pages[i].pp_ref = 1;
             continue;
         }
@@ -479,7 +491,7 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 {
 	// Fill this function in
     for (size_t off = 0; off < size; off += PGSIZE) {
-        pte_t *pte = pgdir_walk(pgdir, (void *)(va + off), 0);
+        pte_t *pte = pgdir_walk(pgdir, (void *)(va + off), 1);
         assert(pte != NULL);
         *pte = (pa + off) | perm | PTE_P;
     }
@@ -632,7 +644,14 @@ mmio_map_region(physaddr_t pa, size_t size)
 	// Hint: The staff solution uses boot_map_region.
 	//
 	// Your code here:
-	panic("mmio_map_region not implemented");
+    size = ROUNDUP(size, PGSIZE);
+    boot_map_region(kern_pgdir, base, size, pa, PTE_PCD | PTE_PWT | PTE_W);
+    void *p = (void *)base;
+    base += size;
+    if (base - MMIOBASE > PTSIZE) {
+        panic("mmio_map_region: out of memory\n");
+    }
+    return p;
 }
 
 static uintptr_t user_mem_check_addr;
@@ -880,7 +899,7 @@ check_kern_pgdir(void)
 		assert(check_va2pa(pgdir, UENVS + i) == PADDR(envs) + i);
 
 	// check phys mem
-	for (i = 0; i < npages * PGSIZE; i += PGSIZE)
+	for (i = 0; i < npages * PGSIZE; i += PGSIZE) 
 		assert(check_va2pa(pgdir, KERNBASE + i) == i);
 
 	// check kernel stack

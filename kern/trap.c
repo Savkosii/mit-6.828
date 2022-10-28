@@ -1,3 +1,4 @@
+#include "cpu.h"
 #include <inc/mmu.h>
 #include <inc/x86.h>
 #include <inc/assert.h>
@@ -99,16 +100,16 @@ trap_init(void)
 	// LAB 3: Your code here.
     for (size_t i = 0; i < 256; i++) {
         if (i < 20) {
-            SETGATE(idt[i], 0, 1 << 3, handler[i], 0);
+            SETGATE(idt[i], 0, GD_KT, handler[i], 0);
         }
     }
     // int 0x3 will generate a general protection fault if DPL is 0, 
     // or a break point exception if DPL is 3
-    SETGATE(idt[3], 0, 1 << 3, handler[3], 3);
-    SETGATE(idt[48], 0, 1 << 3, handler[48], 3);
+    SETGATE(idt[3], 0, GD_KT, handler[3], 3);
+    SETGATE(idt[48], 1, GD_KT, handler[48], 3);
 
 	// Per-CPU setup 
-	trap_init_percpu();
+  	trap_init_percpu();
 }
 
 // Initialize and load the per-CPU TSS and IDT
@@ -142,18 +143,31 @@ trap_init_percpu(void)
 
 	// Setup a TSS so that we get the right stack
 	// when we trap to the kernel.
-	ts.ts_esp0 = KSTACKTOP;
-	ts.ts_ss0 = GD_KD;
-	ts.ts_iomb = sizeof(struct Taskstate);
+    
+    uintptr_t this_kstacktop = KSTACKTOP - cpunum() * (KSTKSIZE + KSTKGAP);
+	thiscpu->cpu_ts.ts_esp0 = this_kstacktop;
+	thiscpu->cpu_ts.ts_ss0 = GD_KD;
+	thiscpu->cpu_ts.ts_iomb = sizeof(struct Taskstate);
 
 	// Initialize the TSS slot of the gdt.
-	gdt[GD_TSS0 >> 3] = SEG16(STS_T32A, (uint32_t) (&ts),
+    // ((GD_TSS0 >> 3) + i): the TSS Global Descriptor number for CPU i
+	gdt[(GD_TSS0 >> 3) + cpunum()] = SEG16(STS_T32A, (uint32_t) (&thiscpu->cpu_ts),
 					sizeof(struct Taskstate) - 1, 0);
-	gdt[GD_TSS0 >> 3].sd_s = 0;
+	gdt[(GD_TSS0 >> 3) + cpunum()].sd_s = 0;
+
+     for (size_t i = 0; i < NCPU; i++) {
+         if (i != cpunum()) {
+             // prevent unauthorized environments from doing IO 
+             // TODO:
+             cpus[i].cpu_ts.ts_iomb = 0;
+         }
+     }
 
 	// Load the TSS selector (like other segment selectors, the
 	// bottom three bits are special; we leave them 0)
-	ltr(GD_TSS0);
+      
+    // (((GD_TSS0 >> 3) + i) << 3): the TSS Selector for CPU i
+	ltr(((GD_TSS0 >> 3) + cpunum()) << 3);
 
 	// Load the IDT
 	lidt(&idt_pd);
@@ -259,7 +273,6 @@ trap_dispatch(struct Trapframe *tf)
 void
 trap(struct Trapframe *tf)
 {
-    cprintf("tf: %x\n", tf);
 	// The environment may have set DF and some versions
 	// of GCC rely on DF being clear
 	asm volatile("cld" ::: "cc");
@@ -283,6 +296,7 @@ trap(struct Trapframe *tf)
 		// Acquire the big kernel lock before doing any
 		// serious kernel work.
 		// LAB 4: Your code here.
+        lock_kernel();
 		assert(curenv);
 
 		// Garbage collect if current enviroment is a zombie

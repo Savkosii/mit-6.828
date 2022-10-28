@@ -1,5 +1,6 @@
 /* See COPYRIGHT for copyright information. */
 
+#include "spinlock.h"
 #include <inc/x86.h>
 #include <inc/mmu.h>
 #include <inc/error.h>
@@ -119,12 +120,12 @@ env_init(void)
 {
 	// Set up envs array
 	// LAB 3: Your code here.
-    size_t i = NENV - 1;
-    do {
-        envs[i].env_id = 0;
-        envs[i].env_link = env_free_list;
-        env_free_list = &envs[i];
-    } while (i-- > 0);
+    size_t n = NENV;
+    while (n-- > 0) {
+        envs[n].env_id = 0;
+        envs[n].env_link = env_free_list;
+        env_free_list = &envs[n];
+    }
 	// Per-CPU part of the initialization
 	env_init_percpu();
 }
@@ -534,6 +535,7 @@ env_pop_tf(struct Trapframe *tf)
 void
 env_run(struct Env *e)
 {
+    struct Trapframe *env_tf;
 	// Step 1: If this is a context switch (a new environment is running):
 	//	   1. Set the current environment (if any) back to
 	//	      ENV_RUNNABLE if it is ENV_RUNNING (think about
@@ -554,11 +556,18 @@ env_run(struct Env *e)
 	// LAB 3: Your code here.
     if (curenv != NULL && curenv->env_status == ENV_RUNNING) {
         curenv->env_status = ENV_RUNNABLE;
+        curenv->env_runs -= 1;
     }
     curenv = e;
     curenv->env_status = ENV_RUNNING;
     curenv->env_runs += 1;
+    // Restores the paging.
+    // Since the user mapping above UTOP is identical to 
+    // that of the kernel, it is ok to dereference e.
     lcr3(PADDR(curenv->env_pgdir));
-    env_pop_tf(&curenv->env_tf);
+    env_tf = &curenv->env_tf;
+    unlock_kernel();
+    // switch back to the user mode
+    env_pop_tf(env_tf);
 }
 
