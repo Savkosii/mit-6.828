@@ -24,12 +24,24 @@ void (*_pgfault_handler)(struct UTrapframe *utf);
 void
 set_pgfault_handler(void (*handler)(struct UTrapframe *utf))
 {
-	int r;
+	int err;
 
 	if (_pgfault_handler == 0) {
 		// First time through!
 		// LAB 4: Your code here.
-		panic("set_pgfault_handler not implemented");
+        // Allocate the exception stack and register _pgfault_upcall 
+        // to curenv->env_pgfault_upcall the first time the user set a handler.
+        // The upcall is called by page_fault_handler() at trap_dispatch() in kern/trap.c, 
+        // responsible for calling user's _pgfault_handler and returning to 
+        // the trap-time frame after it finishes, see lib/pfentry.S.
+        if ((err = sys_page_alloc(0, (void *)UXSTACKTOP - PGSIZE, PTE_W | PTE_P | PTE_U))) {
+            cprintf("set_pgfault_handler: sys_page_alloc: %e\n", err);
+            return;
+        }
+        if ((err = sys_env_set_pgfault_upcall(0, _pgfault_upcall))) {
+            cprintf("set_pgfault_handler: sys_env_set_pgfault_upcall: %e\n", err);
+            return;
+        }
 	}
 
 	// Save handler pointer for assembly to call.
