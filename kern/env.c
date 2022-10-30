@@ -1,5 +1,6 @@
 /* See COPYRIGHT for copyright information. */
 
+#include "env.h"
 #include "spinlock.h"
 #include <inc/x86.h>
 #include <inc/mmu.h>
@@ -190,7 +191,7 @@ env_setup_vm(struct Env *e)
 	// LAB 3: Your code here.
     e->env_pgdir = (pde_t *)page2kva(pp);
     pp->pp_ref += 1;
-    for (size_t i = 0; i < PDX(0xfffff000); i++) {
+    for (size_t i = 0; i < NPDENTRIES; i++) {
         if (i < PDX(UTOP)) {
             e->env_pgdir[i] = 0;
             continue;
@@ -372,9 +373,9 @@ load_icode(struct Env *e, uint8_t *binary)
 	struct Proghdr *eph = ph + elf->e_phnum;
 
     // Enable e->env_pgdir temporarily.
-    // Since above UTOP, e->env_pgdir has the same mappings as kern_pgdir,
-    // we can copy bytes pointed by (void *)binary to ph->p_va,
-    // the mappings of which are only installed by e->env_pgdir.
+    // Since above UTOP, e->env_pgdir has identical mappings as kern_pgdir,
+    // we can copy bytes at (void *)binary to (void *)ph->p_va then,
+    // the paging of which is only installed at e->env_pgdir.
     lcr3(PADDR(e->env_pgdir));
 
 	for (; ph < eph; ph++) {

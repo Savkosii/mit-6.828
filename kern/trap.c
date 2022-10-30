@@ -1,7 +1,9 @@
 #include "cpu.h"
+#include "env.h"
 #include <inc/mmu.h>
 #include <inc/x86.h>
 #include <inc/assert.h>
+#include <inc/string.h>
 
 #include <kern/pmap.h>
 #include <kern/trap.h>
@@ -72,7 +74,7 @@ trap_init(void)
 {
 	extern struct Segdesc gdt[];
 
-    void (*handler[256])(void) = {
+    void (*handler[256])() = {
         HANDLER_DIVIDE,
         HANDLER_DEBUG,
         HANDLER_NMI,
@@ -380,10 +382,49 @@ page_fault_handler(struct Trapframe *tf)
 	//   (the 'tf' variable points at 'curenv->env_tf').
 
 	// LAB 4: Your code here.
+    if (curenv->env_pgfault_upcall != NULL) {
+        // The exception stack is allocated by user the first time 
+        // it set the pgfault handler (see lib/pgfault.c),
+        // thus we don't have to allocate the exception stack here.
+        // Note: kernel cannot access these mappings as they are not installed in kern_pgdir. 
+        // These mappings will be free only when env is free.
+        uintptr_t handler_stacktop = UXSTACKTOP;
+        // If the user environment is already running on the user exception stack 
+        // when an exception occurs, we start the new stack frame 
+        // under the current tf->tf_esp - 4 rather than at UXSTACKTOP
+        if (tf->tf_esp >= UXSTACKTOP - PGSIZE && tf->tf_esp < UXSTACKTOP) {
+            handler_stacktop = tf->tf_esp - 4;
+        }
+        // Note: the original trapframe has already been copied into 
+        // curenv->env_tf in trap(), and it is pointed by the tf here.
+        struct UTrapframe utf = {
+            .utf_fault_va = fault_va,
+            .utf_err = tf->tf_err,
+            .utf_regs = tf->tf_regs,
+            // where the handler should return to
+            .utf_eip = tf->tf_eip,
+            .utf_eflags = tf->tf_eflags,
+            .utf_esp = tf->tf_esp,
+        };
+        uintptr_t handler_esp = handler_stacktop - sizeof(struct UTrapframe);
+        user_mem_assert(curenv, (void *)handler_esp, sizeof(struct UTrapframe), PTE_W);
+        // Enable curenv->env_pgdir temporarily.
+        // Since above UTOP, curenv->env_pgdir has identical mappings as kern_pgdir,
+        // we can copy bytes at &utf to [UXSTACKTOP-PGSIZE, UXSTACKTOP) then,
+        // the paging of which is only installed at curenv->env_pgdir.
+        lcr3(PADDR(curenv->env_pgdir));
+        memcpy((void *)handler_esp, &utf, sizeof(struct UTrapframe));
+        // Restore the kernel paging
+        lcr3(PADDR(kern_pgdir));
+        // Set the handler's stack pointer and entry point, 
+        // and invoke the handler via env_run().
+        curenv->env_tf.tf_esp = handler_esp;
+        curenv->env_tf.tf_eip = (uintptr_t)curenv->env_pgfault_upcall;
+        env_run(curenv);
+    }
 
 	// Destroy the environment that caused the fault.
-	cprintf("[%08x] user fault va %08x ip %08x\n",
-		curenv->env_id, fault_va, tf->tf_eip);
+	cprintf("[%08x] user fault va %08x ip %08x\n", curenv->env_id, fault_va, tf->tf_eip);
 	print_trapframe(tf);
 	env_destroy(curenv);
 }
