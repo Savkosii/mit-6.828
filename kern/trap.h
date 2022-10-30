@@ -42,5 +42,10 @@ void HANDLER_MCHK(void);
 void HANDLER_SIMDERR(void);
 
 void HANDLER_SYSCALL(void);
+void HANDLER_IRQ_TIMER(void);
+void HANDLER_IRQ_KBD(void);
+void HANDLER_IRQ_SERIAL(void);
+void HANDLER_IRQ_SPURIOUS(void);
+void HANDLER_IRQ_IDE(void);
 
 #endif /* JOS_KERN_TRAP_H */

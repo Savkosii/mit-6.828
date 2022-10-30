@@ -127,15 +127,15 @@ fork(void)
       
     // Child will start from here if spawned successfully 
       
-    // Child
     if (envid == 0) {
-        // we know that environment for child has already been set up by the parent.
+        // We know that environment for child has already been set up by the parent.
+        // Reset thisenv. Note: curenv is kernel-private.
 		thisenv = &envs[ENVX(sys_getenvid())];
 		return 0;
     }
               
-    // Parent
-    // map from .text to the end of .bss in user address space.
+    // Parent only
+    // Map from .text to the end of .bss in user address space.
 	extern unsigned char end[];
 	for (uintptr_t va = UTEXT; va < (uintptr_t)end; va += PGSIZE) {
 		if ((err = duppage(envid, PGNUM(va)))) {

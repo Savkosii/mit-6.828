@@ -96,9 +96,14 @@ trap_init(void)
         HANDLER_MCHK,
         HANDLER_SIMDERR,
 
-        [48] = HANDLER_SYSCALL,
-    };
-
+        [T_SYSCALL] = HANDLER_SYSCALL,
+        [IRQ_OFFSET + IRQ_TIMER]    =  HANDLER_IRQ_TIMER,
+        [IRQ_OFFSET + IRQ_KBD]      =  HANDLER_IRQ_KBD,
+        [IRQ_OFFSET + IRQ_SERIAL]   =  HANDLER_IRQ_SERIAL,
+        [IRQ_OFFSET + IRQ_SPURIOUS] =  HANDLER_IRQ_SPURIOUS,
+        [IRQ_OFFSET + IRQ_IDE]      =  HANDLER_IRQ_IDE,
+    };  
+        
 	// LAB 3: Your code here.
     for (size_t i = 0; i < 256; i++) {
         if (i < 20) {
@@ -107,8 +112,17 @@ trap_init(void)
     }
     // int 0x3 will generate a general protection fault if DPL is 0, 
     // or a break point exception if DPL is 3
-    SETGATE(idt[3], 0, GD_KT, handler[3], 3);
-    SETGATE(idt[48], 1, GD_KT, handler[48], 3);
+    SETGATE(idt[T_BRKPT], 0, GD_KT, handler[T_BRKPT], 3);
+    // If the second argument is set to 1, then
+    // the interrupt flag (IF) of eflags won't be cleared by hardware automatically
+    // upon switching into HANDLER_SYSCALL() in kern/trapentry.S.
+    // But we expects IF to be cleared before switch into kernel mode.
+    SETGATE(idt[T_SYSCALL], 0, GD_KT, handler[T_SYSCALL], 3);
+    SETGATE(idt[IRQ_OFFSET + IRQ_TIMER], 0, GD_KT,    handler[IRQ_OFFSET + IRQ_TIMER], 3);
+    SETGATE(idt[IRQ_OFFSET + IRQ_KBD], 0, GD_KT,      handler[IRQ_OFFSET + IRQ_KBD], 3);
+    SETGATE(idt[IRQ_OFFSET + IRQ_SERIAL], 0, GD_KT,   handler[IRQ_OFFSET + IRQ_SERIAL], 3);
+    SETGATE(idt[IRQ_OFFSET + IRQ_SPURIOUS], 0, GD_KT, handler[IRQ_OFFSET + IRQ_SPURIOUS], 3);
+    SETGATE(idt[IRQ_OFFSET + IRQ_IDE], 0, GD_KT,      handler[IRQ_OFFSET + IRQ_IDE], 3);
 
 	// Per-CPU setup 
   	trap_init_percpu();
@@ -229,12 +243,14 @@ trap_dispatch(struct Trapframe *tf)
     if (tf->tf_trapno == T_PGFLT) {
         page_fault_handler(tf);
         return;
+    } 
 
-    } else if (tf->tf_trapno == T_BRKPT) {
+    if (tf->tf_trapno == T_BRKPT) {
         monitor(tf);
         return;
+    } 
 
-    } else if (tf->tf_trapno == T_SYSCALL) {
+    if (tf->tf_trapno == T_SYSCALL) {
         uint32_t syscallno, ret;
         uint32_t a1, a2, a3, a4, a5;
         syscallno = tf->tf_regs.reg_eax;
@@ -261,6 +277,12 @@ trap_dispatch(struct Trapframe *tf)
 	// Handle clock interrupts. Don't forget to acknowledge the
 	// interrupt using lapic_eoi() before calling the scheduler!
 	// LAB 4: Your code here.
+	if (tf->tf_trapno == IRQ_OFFSET + IRQ_TIMER) {
+		cprintf("Timer interrupt on irq 0\n");
+        lapic_eoi();
+        // never return
+        sched_yield();
+	}
 
 	// Unexpected trap: The user process or the kernel has a bug.
 	print_trapframe(tf);
