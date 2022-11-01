@@ -194,7 +194,8 @@ mem_init(void)
 	// Your code goes here:
 	n = ROUNDUP(npages * sizeof(struct PageInfo), PGSIZE);
 	for (size_t off = 0; off < n; off += PGSIZE) {
-        page_insert(kern_pgdir, pa2page(PADDR(pages) + off), (void *)(UPAGES + off), PTE_U | PTE_P);
+        page_insert(kern_pgdir, pa2page(PADDR(pages) + off), 
+                   (void *)(UPAGES + off), PTE_U);
     }
 
 	//////////////////////////////////////////////////////////////////////
@@ -206,7 +207,8 @@ mem_init(void)
 	// LAB 3: Your code here.
 	n = ROUNDUP(NENV * sizeof(struct Env), PGSIZE);
 	for (size_t off = 0; off < n; off += PGSIZE) {
-        page_insert(kern_pgdir, pa2page(PADDR(envs) + off), (void *)(UENVS + off), PTE_U | PTE_P);
+        page_insert(kern_pgdir, pa2page(PADDR(envs) + off), 
+                   (void *)(UENVS + off), PTE_U);
     }
 
 	//////////////////////////////////////////////////////////////////////
@@ -221,7 +223,8 @@ mem_init(void)
 	//     Permissions: kernel RW, user NONE
 	// Your code goes here:
     for (size_t off = 0; off < KSTKSIZE; off += PGSIZE) {
-        page_insert(kern_pgdir, pa2page(PADDR(bootstack) + off), (void *)(KSTACKTOP - KSTKSIZE + off), PTE_W | PTE_P);
+        page_insert(kern_pgdir, pa2page(PADDR(bootstack) + off), 
+                   (void *)(KSTACKTOP - KSTKSIZE + off), PTE_W);
     }
        
 	//////////////////////////////////////////////////////////////////////
@@ -233,7 +236,8 @@ mem_init(void)
 	// Permissions: kernel RW, user NONE
 	// Your code goes here:
     for (size_t off = 0; off <= 0xfffff000 - KERNBASE; off += PGSIZE) {
-        page_insert(kern_pgdir, pa2page(off % (npages * PGSIZE)), (void *)(KERNBASE + off), PTE_W | PTE_P);
+        page_insert(kern_pgdir, pa2page(off % (npages * PGSIZE)), 
+                   (void *)(KERNBASE + off), PTE_W);
     }
 
 	// Initialize the SMP-related parts of the memory map
@@ -292,7 +296,7 @@ mem_init_mp(void)
         void *this_kstacktop = (void *)KSTACKTOP - i  * (KSTKSIZE + KSTKGAP);
         for (size_t off = 0; off < KSTKSIZE; off += PGSIZE) {
             page_insert(kern_pgdir, pa2page(PADDR(percpu_kstacks[i]) + off), 
-                       this_kstacktop - KSTKSIZE + off, PTE_W | PTE_P);
+                       this_kstacktop - KSTKSIZE + off, PTE_W);
         }
     }
 
@@ -455,7 +459,7 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
     // from the linear address (aka. virtual address since segment translation was disabled)
     uint32_t pdx = PDX(va);
     uint32_t ptx = PTX(va);
-    if (pgdir[pdx] == 0) {
+    if (!(pgdir[pdx] & PTE_P)) {
         if (!create) {
             return NULL;
         }

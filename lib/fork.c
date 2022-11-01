@@ -31,13 +31,20 @@ pgfault(struct UTrapframe *utf)
     // uvpd[] points to the page directory entries (page tables) of curenv->env_pgdir
     // uvpt[] points to all the page table entries (pages) in curenv->env_pgdir.
     // see https://pdos.csail.mit.edu/6.828/2018/labs/lab4/uvpt.html
-    unsigned pn = PGNUM(addr);
-    volatile pte_t *pte = &uvpt[pn];
-    if (*pte == 0) {
+    unsigned pdx = PDX(addr);
+    volatile pde_t *pde = &uvpd[pdx];
+    if (!(*pde & PTE_P)) {
         panic("pgfault: no such a page");
     }
+
+    unsigned pn = PGNUM(addr);
+    volatile pte_t *pte = &uvpt[pn];
+    if (!(*pte & PTE_P)) {
+        panic("pgfault: no such a page");
+    }
+
     if (!(*pte & PTE_COW)) {
-        panic("pgfault: invalid permission");
+        panic("pgfault: not copy-on-write page");
     }
 
 	// Allocate a new page, map it at a temporary location (PFTEMP),
@@ -50,10 +57,11 @@ pgfault(struct UTrapframe *utf)
     if ((r = sys_page_alloc(0, (void *)PFTEMP, PTE_U | PTE_P | PTE_W))) {
         panic("pgfault: %e", r);
     }
-    void *fp_va = (void *)((uintptr_t)addr & ~0xfff);
-    memcpy((void *)PFTEMP, fp_va, PGSIZE);
+
+    void *fp_va = (void *)ROUNDDOWN(addr, PGSIZE);
+    memmove((void *)PFTEMP, fp_va, PGSIZE);
     // the permission to be restored
-    int perm = ((*pte & 0xf0f) & ~PTE_COW) | PTE_W;
+    int perm = ((*pte & PTE_SYSCALL) & ~PTE_COW) | PTE_W;
     if ((r = sys_page_map(0, (void *)PFTEMP, 0, fp_va, perm))) {
         panic("pgfault: %e", r);
     }
@@ -79,16 +87,27 @@ duppage(envid_t envid, unsigned pn)
 	int r;
 
 	// LAB 4: Your code here.
-    void *va = (void *)(pn * PGSIZE);
+    //
+    // The caller should make sure that the correpsonding page table of page pn
+    // has been allocated (i.e., (uvpd[pn / NPTENTRIES] & PTE_P) != 0),
+    // or dereferencing &uvpt[pn] will trigger a page fault.
+    //
     volatile pte_t *pte = &uvpt[pn];
-    int perm = *pte & 0xf0f;
-    int remap = 0;
-    if ((perm & PTE_W) || (perm & PTE_COW)) {
-        // mark it as not writable.
+    int perm = *pte & PTE_SYSCALL;
+    bool remap = 0;
+    // return silently if page pn is not mapped
+    if (!(*pte & PTE_P)) {
+        return 0;
+    }
+    // If page pn is a share page, do not mark it as Copy-On-Write -
+    // map it directly instead.
+    if (!(perm & PTE_SHARE) && ((perm & PTE_W) || (perm & PTE_COW))) {
+        // mark pn as not writable.
         perm &= ~PTE_W;
         perm |= PTE_COW;
         remap = 1;
     }
+    void *va = (void *)(pn * PGSIZE);
     if ((r = sys_page_map(0, va, envid, va, perm))) {
         return r;
     }
@@ -125,35 +144,51 @@ fork(void)
         return envid;
     }
       
+    //
     // Child will start from here if spawned successfully 
-      
+    //
     if (envid == 0) {
         // We know that environment for child has already been set up by the parent.
         // Reset thisenv. Note: curenv is kernel-private.
 		thisenv = &envs[ENVX(sys_getenvid())];
 		return 0;
     }
-              
+      
+    //
     // Parent only
-    // Map from .text to the end of .bss in user address space.
-	extern unsigned char end[];
-	for (uintptr_t va = UTEXT; va < (uintptr_t)end; va += PGSIZE) {
-		if ((err = duppage(envid, PGNUM(va)))) {
-            return err;
+    // 
+    for (size_t pdx = 0; pdx < PDX(UTOP); pdx++) {
+        volatile pde_t *pde = &uvpd[pdx];
+        if (!(*pde & PTE_P)) {
+            continue;
+        }
+        for (size_t ptx = 0; ptx < NPTENTRIES; ptx++) {
+            size_t pn = pdx * NPTENTRIES + ptx;
+            // Do not map child's user exception stack. 
+            // We will allocate a new page for it instead.
+            if (pn == PGNUM(UXSTACKTOP - PGSIZE)) {
+                continue;
+            }
+            if ((err = duppage(envid, pn))) {
+                return err;
+            }
         }
     }
-    if ((err = duppage(envid, PGNUM(USTACKTOP - PGSIZE)))) {
-        return err;
-    }
+
     if ((err = sys_page_alloc(envid, (void *)UXSTACKTOP - PGSIZE, 
-        PTE_U | PTE_P | PTE_W))) {
-        return err;
+       PTE_U | PTE_P | PTE_W))) {
+       return err;
     }
+
+    // Set the parent's pgfault upcall to the child 
+    // (modify child's env_pgfault_upcall field in kernel).
+    // It is ok to do so since they share one program data space.
     extern void _pgfault_upcall(void);
     if ((err = sys_env_set_pgfault_upcall(envid, _pgfault_upcall))) {
         return err;
     }
-    // mark the child as runnable
+
+    // Mark the child as runnable
     // if the environment is not set up appropriately, 
     // then child might be spawned as well, but it can fault easily.
     if ((err = sys_env_set_status(envid, ENV_RUNNABLE))) {

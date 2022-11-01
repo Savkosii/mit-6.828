@@ -135,7 +135,19 @@ sys_env_set_trapframe(envid_t envid, struct Trapframe *tf)
 	// LAB 5: Your code here.
 	// Remember to check whether the user has supplied us with a good
 	// address!
-	panic("sys_env_set_trapframe not implemented");
+    int err;
+    struct Env *e;
+    if ((err = envid2env(envid, &e, 1))) {
+        return err;
+    }
+    user_mem_assert(curenv, tf, sizeof(struct Trapframe), 0);
+    e->env_tf = *tf;
+    // the least significant 2 bits of cs specifies the CPL level.
+	e->env_tf.tf_cs |= 3;
+    e->env_tf.tf_eflags |= FL_IF;
+    e->env_tf.tf_eflags &= ~FL_IOPL_MASK;
+    e->env_tf.tf_eflags |= FL_IOPL_0;
+    return 0;
 }
 
 // Set the page fault upcall for 'envid' by modifying the corresponding struct
@@ -194,10 +206,7 @@ sys_page_alloc(envid_t envid, void *va, int perm)
     if (va >= (void *)UTOP || ((uintptr_t)va & 0xfff)) {
         return -E_INVAL;
     }
-    if (!(perm & PTE_P) || !(perm & PTE_U)) {
-        return -E_INVAL;
-    }
-    if (perm & ~PTE_SYSCALL) {
+    if (!(perm & PTE_P) || !(perm & PTE_U) || (perm & ~PTE_SYSCALL)) {
         return -E_INVAL;
     }
     struct PageInfo *pp;
@@ -253,10 +262,7 @@ sys_page_map(envid_t srcenvid, void *srcva,
     if (dstva >= (void *)UTOP || ((uintptr_t)dstva & 0xfff)) {
         return -E_INVAL;
     }
-    if (!(perm & PTE_P) || !(perm & PTE_U)) {
-        return -E_INVAL;
-    }
-    if (perm & ~PTE_SYSCALL) {
+    if (!(perm & PTE_P) || !(perm & PTE_U) || (perm & ~PTE_SYSCALL)) {
         return -E_INVAL;
     }
     pte_t *pte;
@@ -404,9 +410,10 @@ sys_ipc_recv(void *dstva)
     }
     curenv->env_ipc_recving = true;
     curenv->env_status = ENV_NOT_RUNNABLE;
-    // If no error occurs, receiver never return from this system call.
-    // We expects the sender to pops the receiver from trapframe.
     sched_yield();
+    // If no error occurs, receiver never return from this system call.
+    // We expects the sender to pop the receiver from trapframe by
+    // marking it as runnable.
 }
 
 // Dispatches to the correct kernel function, passing the arguments.
@@ -458,6 +465,9 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, 
 
         case SYS_ipc_recv:
             return sys_ipc_recv((void *)a1);
+
+        case SYS_env_set_trapframe:
+            return sys_env_set_trapframe((envid_t)a1, (struct Trapframe *)a2);
 
         default:
             return -E_INVAL;

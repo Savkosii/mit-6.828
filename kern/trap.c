@@ -110,19 +110,21 @@ trap_init(void)
             SETGATE(idt[i], 0, GD_KT, handler[i], 0);
         }
     }
-    // int 0x3 will generate a general protection fault if DPL is 0, 
-    // or a break point exception if DPL is 3
+    // The fourth argument DPL specifies the priviledge level 
+    // required in order to invoke the interrupt.
+    // User's int 0x3 will generate a general protection fault 
+    // instead of a breakpoint exception if DPL is 0
     SETGATE(idt[T_BRKPT], 0, GD_KT, handler[T_BRKPT], 3);
-    // If the second argument is set to 1, then
+    // If the second argument istrap is set to 1, then
     // the interrupt flag (IF) of eflags won't be cleared by hardware automatically
-    // upon switching into HANDLER_SYSCALL() in kern/trapentry.S.
-    // But we expects IF to be cleared before switch into kernel mode.
+    // upon switching into kernel's HANDLER_SYSCALL() in kern/trapentry.S.
+    // But we expects IF to be cleared when we are in the kernel.
     SETGATE(idt[T_SYSCALL], 0, GD_KT, handler[T_SYSCALL], 3);
-    SETGATE(idt[IRQ_OFFSET + IRQ_TIMER], 0, GD_KT,    handler[IRQ_OFFSET + IRQ_TIMER], 3);
-    SETGATE(idt[IRQ_OFFSET + IRQ_KBD], 0, GD_KT,      handler[IRQ_OFFSET + IRQ_KBD], 3);
-    SETGATE(idt[IRQ_OFFSET + IRQ_SERIAL], 0, GD_KT,   handler[IRQ_OFFSET + IRQ_SERIAL], 3);
-    SETGATE(idt[IRQ_OFFSET + IRQ_SPURIOUS], 0, GD_KT, handler[IRQ_OFFSET + IRQ_SPURIOUS], 3);
-    SETGATE(idt[IRQ_OFFSET + IRQ_IDE], 0, GD_KT,      handler[IRQ_OFFSET + IRQ_IDE], 3);
+    SETGATE(idt[IRQ_OFFSET + IRQ_TIMER], 0, GD_KT,    handler[IRQ_OFFSET + IRQ_TIMER], 0);
+    SETGATE(idt[IRQ_OFFSET + IRQ_KBD], 0, GD_KT,      handler[IRQ_OFFSET + IRQ_KBD], 0);
+    SETGATE(idt[IRQ_OFFSET + IRQ_SERIAL], 0, GD_KT,   handler[IRQ_OFFSET + IRQ_SERIAL], 0);
+    SETGATE(idt[IRQ_OFFSET + IRQ_SPURIOUS], 0, GD_KT, handler[IRQ_OFFSET + IRQ_SPURIOUS], 0);
+    SETGATE(idt[IRQ_OFFSET + IRQ_IDE], 0, GD_KT,      handler[IRQ_OFFSET + IRQ_IDE], 0);
 
 	// Per-CPU setup 
   	trap_init_percpu();
@@ -278,7 +280,6 @@ trap_dispatch(struct Trapframe *tf)
 	// interrupt using lapic_eoi() before calling the scheduler!
 	// LAB 4: Your code here.
 	if (tf->tf_trapno == IRQ_OFFSET + IRQ_TIMER) {
-		cprintf("Timer interrupt on irq 0\n");
         lapic_eoi();
         // never return
         sched_yield();
@@ -286,6 +287,15 @@ trap_dispatch(struct Trapframe *tf)
 
 	// Handle keyboard and serial interrupts.
 	// LAB 5: Your code here.
+	if (tf->tf_trapno == IRQ_OFFSET + IRQ_KBD) {
+        kbd_intr();
+        return;
+	}
+
+	if (tf->tf_trapno == IRQ_OFFSET + IRQ_SERIAL) {
+        serial_intr();
+        return;
+	}
 
 	// Unexpected trap: The user process or the kernel has a bug.
 	print_trapframe(tf);
