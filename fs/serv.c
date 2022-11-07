@@ -7,6 +7,7 @@
 #include <inc/string.h>
 
 #include "fs.h"
+#include "inc/stdio.h"
 
 
 #define debug 0

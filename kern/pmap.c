@@ -1,6 +1,7 @@
 /* See COPYRIGHT for copyright information. */
 
 #include "cpu.h"
+#include "inc/memlayout.h"
 #include <inc/x86.h>
 #include <inc/mmu.h>
 #include <inc/error.h>
@@ -568,7 +569,7 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
     // if the page table hasn't been allocated yet
     // or no page is mapped at the page entry
     // return NULL
-    if ((pte = pgdir_walk(pgdir, va, 0)) == NULL || *pte == 0) {
+    if ((pte = pgdir_walk(pgdir, va, 0)) == NULL || !(*pte & PTE_P)) {
         return NULL;
     }
     if (pte_store != NULL) {
@@ -618,6 +619,7 @@ tlb_invalidate(pde_t *pgdir, void *va)
 		invlpg(va);
 }
 
+
 //
 // Reserve size bytes in the MMIO region and map [pa,pa+size) at this
 // location.  Return the base of the reserved region.  size does *not*
@@ -660,6 +662,7 @@ mmio_map_region(physaddr_t pa, size_t size)
     return p;
 }
 
+
 static uintptr_t user_mem_check_addr;
 
 //
@@ -688,11 +691,16 @@ user_mem_check(struct Env *env, const void *va, size_t len, int perm)
         user_mem_check_addr = (uintptr_t)va;
         return -E_FAULT;
     }
+    if (va + len > (void *)ULIM) {
+        user_mem_check_addr = (uintptr_t)va;
+        return -E_FAULT;
+    }
+    pde_t *pgdir = env->env_pgdir;
     pte_t *pte;
     void *end = (void *)va + len;
     int off_start = PGOFF(va);
     for (; va < end; va += PGSIZE) {
-        if ((pte = pgdir_walk(env->env_pgdir, va, 0)) == NULL) {
+        if ((pte = pgdir_walk(pgdir, va, 0)) == NULL) {
             user_mem_check_addr = (uintptr_t)va;
             return -E_FAULT;
         }

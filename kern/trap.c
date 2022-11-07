@@ -1,5 +1,9 @@
 #include "cpu.h"
 #include "env.h"
+#include "inc/error.h"
+#include "inc/lib.h"
+#include "inc/stdio.h"
+#include "inc/types.h"
 #include <inc/mmu.h>
 #include <inc/x86.h>
 #include <inc/assert.h>
@@ -240,6 +244,23 @@ print_regs(struct PushRegs *regs)
 static void
 trap_dispatch(struct Trapframe *tf)
 {
+    // invalidating all the breakpoints
+    for (size_t i = 0; i < curenv->bpnum; i++) {
+        struct PageInfo *pp;
+        uintptr_t bp_va = curenv->bp[i].va;
+        if ((pp = page_lookup(curenv->env_pgdir, (void *)bp_va, 0)) == NULL) {
+            cprintf("warning: unreachable breakpoint at 0x%x\n", bp_va);
+            continue;
+        }
+        unsigned char *victim = page2kva(pp) + PGOFF(bp_va); 
+        *victim = curenv->bp[i].victim;
+        // make sure the breakpoint is the one set by the kernel monitor 
+        // instead of int 0x3.
+        if (tf->tf_trapno == T_BRKPT && tf->tf_eip - 1 == bp_va) {
+            tf->tf_eip -= 1;
+        }
+    }
+
 	// Handle processor exceptions.
 	// LAB 3: Your code here.
     if (tf->tf_trapno == T_PGFLT) {
@@ -248,9 +269,21 @@ trap_dispatch(struct Trapframe *tf)
     } 
 
     if (tf->tf_trapno == T_BRKPT) {
+        cprintf("Environment [%x] stopped at 0x%x\n", curenv->env_id, tf->tf_eip);
         monitor(tf);
         return;
     } 
+
+    if (tf->tf_trapno == T_DEBUG) {
+        if (curenv->to_continue) {
+            tf->tf_eflags &= ~FL_TF;
+            curenv->to_continue = false;
+            sys_yield();
+        }
+        cprintf("Environment [%x] stopped at 0x%x\n", curenv->env_id, tf->tf_eip);
+        monitor(tf);
+        return;
+    }
 
     if (tf->tf_trapno == T_SYSCALL) {
         uint32_t syscallno, ret;
@@ -443,7 +476,7 @@ page_fault_handler(struct Trapframe *tf)
         };
         uintptr_t handler_esp = handler_stacktop - sizeof(struct UTrapframe);
         user_mem_assert(curenv, (void *)handler_esp, sizeof(struct UTrapframe), PTE_W);
-        // Enable curenv->env_pgdir temporarily.
+        // Force to enable curenv->env_pgdir temporarily.
         // Since above UTOP, curenv->env_pgdir has identical mappings as kern_pgdir,
         // we can copy bytes at &utf to [UXSTACKTOP-PGSIZE, UXSTACKTOP) then,
         // the paging of which is only installed at curenv->env_pgdir.
