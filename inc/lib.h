@@ -58,6 +58,13 @@ int	sys_page_unmap(envid_t env, void *pg);
 int	sys_ipc_try_send(envid_t to_env, uint32_t value, void *pg, int perm);
 int	sys_ipc_recv(void *rcv_pg);
 
+int sys_exec_config_pgdir_alloc(envid_t envid);
+int sys_exec_config_page_alloc(envid_t envid, void *va, int perm);
+int sys_exec_config_page_map(envid_t srcenvid, void *srcva,
+	   envid_t dstenvid, void *dstva, int perm);
+int sys_exec_config_page_unmap(envid_t envid, void *va);
+int sys_exec(envid_t envid, struct Trapframe *tf);
+
 // This must be inlined.  Exercise for reader: why?
 static inline envid_t __attribute__((always_inline))
 sys_exofork(void)
@@ -103,6 +110,9 @@ int	pageref(void *addr);
 // spawn.c
 envid_t	spawn(const char *program, const char **argv);
 envid_t	spawnl(const char *program, const char *arg0, ...);
+
+// exec.c
+int     exec(const char *path, const char **argv);
 
 // console.c
 void	cputchar(int c);

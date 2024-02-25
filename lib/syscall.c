@@ -117,3 +117,35 @@ sys_ipc_recv(void *dstva)
 	return syscall(SYS_ipc_recv, 1, (uint32_t)dstva, 0, 0, 0, 0);
 }
 
+
+int 
+sys_exec_config_pgdir_alloc(envid_t envid) {
+    return syscall(SYS_exec_config_pgdir_alloc, 0, envid, 0, 0, 0, 0);
+}
+
+int 
+sys_exec_config_page_alloc(envid_t envid, void *va, int perm)
+{
+    return syscall(SYS_exec_config_page_alloc, 0, envid, (uintptr_t)va, perm, 0, 0);
+}
+
+int 
+sys_exec_config_page_map(envid_t srcenvid, void *srcva,
+	     envid_t dstenvid, void *dstva, int perm)
+{
+    return syscall(SYS_exec_config_page_map, 0, srcenvid, 
+      (uintptr_t)srcva, dstenvid, (uintptr_t)dstva, perm);
+}
+
+int 
+sys_exec_config_page_unmap(envid_t envid, void *va)
+{
+    return syscall(SYS_exec_config_page_unmap, 0, envid, (uintptr_t)va, 0, 0, 0);
+}
+
+
+int
+sys_exec(envid_t envid, struct Trapframe *tf)
+{
+    return syscall(SYS_exec, 0, envid, (uintptr_t)tf, 0, 0, 0);
+}

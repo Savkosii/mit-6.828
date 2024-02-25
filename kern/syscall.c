@@ -416,6 +416,131 @@ sys_ipc_recv(void *dstva)
     // marking it as runnable.
 }
 
+
+static int 
+sys_exec_config_pgdir_alloc(envid_t envid) 
+{
+    int err;
+    struct Env *e;
+    if ((err = envid2env(envid, &e, 1))) {
+        return err;
+    }
+    if (e->exec_pgdir != NULL) {
+        env_free_pgdir(e->exec_pgdir);
+    }
+    if ((err = env_alloc_pgdir(&e->exec_pgdir))) {
+        return err;
+    }
+
+    return 0;
+}
+
+
+static int
+sys_exec_config_page_alloc(envid_t envid, void *va, int perm)
+{
+    int err;
+    struct Env *e;
+    if ((err = envid2env(envid, &e, 1))) {
+        return err;
+    }
+    if (va >= (void *)UTOP || ((uintptr_t)va & 0xfff)) {
+        return -E_INVAL;
+    }
+    if (!(perm & PTE_P) || !(perm & PTE_U) || (perm & ~PTE_SYSCALL)) {
+        return -E_INVAL;
+    }
+    if (e->exec_pgdir == NULL) {
+        return -E_INVAL;
+    }
+    struct PageInfo *pp;
+    if ((pp = page_alloc(ALLOC_ZERO)) == NULL) {
+        return -E_NO_MEM;
+    }
+    if ((err = page_insert(e->exec_pgdir, pp, va, perm))) {
+        return err;
+    }
+    return 0;
+}
+
+
+static int 
+sys_exec_config_page_map(envid_t srcenvid, void *srcva,
+	     envid_t dstenvid, void *dstva, int perm)
+{
+    int err;
+    struct Env *srcenv;
+    struct Env *dstenv;
+    if ((err = envid2env(srcenvid, &srcenv, 1))) {
+        return err;
+    }
+    if ((err = envid2env(dstenvid, &dstenv, 1))) {
+        return err;
+    }
+    if (srcva >= (void *)UTOP || ((uintptr_t)srcva & 0xfff)) {
+        return -E_INVAL;
+    }
+    if (dstva >= (void *)UTOP || ((uintptr_t)dstva & 0xfff)) {
+        return -E_INVAL;
+    }
+    if (!(perm & PTE_P) || !(perm & PTE_U) || (perm & ~PTE_SYSCALL)) {
+        return -E_INVAL;
+    }
+    if (dstenv->exec_pgdir == NULL) {
+        return -E_INVAL;
+    }
+    pte_t *pte;
+    struct PageInfo *pp;
+    if ((pp = page_lookup(srcenv->env_pgdir, srcva, &pte)) == NULL) {
+        return -E_INVAL;
+    }
+    if (!(*pte & PTE_W) && (perm & PTE_W)) {
+        return -E_INVAL;
+    }
+    if ((err = page_insert(dstenv->exec_pgdir, pp, dstva, perm))) {
+        return err;
+    }
+    return 0;
+}
+
+static int
+sys_exec_config_page_unmap(envid_t envid, void *va)
+{
+    int err;
+    struct Env *e;
+    if ((err = envid2env(envid, &e, 1))) {
+        return err;
+    }
+    if (va >= (void *)UTOP || ((uintptr_t)va & 0xfff)) {
+        return -E_INVAL;
+    }
+    if (e->exec_pgdir == NULL) {
+        return -E_INVAL;
+    }
+    page_remove(e->exec_pgdir, va);
+    return 0;
+}
+
+static int
+sys_exec(envid_t envid, struct Trapframe *tf)
+{
+    int err;
+    struct Env *e;
+    if ((err = envid2env(envid, &e, 1))) {
+        return err;
+    }
+    if ((err = sys_env_set_trapframe(envid, tf))) {
+        return err;
+    }
+    if (e == curenv) {
+        lcr3(PADDR(kern_pgdir));
+    }
+    env_free_pgdir(e->env_pgdir);
+    e->env_pgdir = e->exec_pgdir;
+    e->exec_pgdir = 0;
+    return 0;
+}
+
 // Dispatches to the correct kernel function, passing the arguments.
 int32_t
 syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5)
@@ -468,6 +593,21 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, 
 
         case SYS_env_set_trapframe:
             return sys_env_set_trapframe((envid_t)a1, (struct Trapframe *)a2);
+
+        case SYS_exec_config_pgdir_alloc:
+            return sys_exec_config_pgdir_alloc(a1);
+
+        case SYS_exec_config_page_alloc:
+            return sys_exec_config_page_alloc((envid_t)a1, (void *)a2, a3);
+
+        case SYS_exec_config_page_map:
+            return sys_exec_config_page_map((envid_t)a1, (void *)a2, (envid_t)a3, (void *)a4, a5);
+
+        case SYS_exec_config_page_unmap:
+            return sys_exec_config_page_unmap((envid_t)a1, (void *)a2);
+
+        case SYS_exec:
+            return sys_exec((envid_t)a1, (struct Trapframe *)a2);
 
         default:
             return -E_INVAL;

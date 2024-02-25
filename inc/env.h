@@ -66,6 +66,21 @@ struct Env {
 	uint32_t env_ipc_value;		// Data value sent to us
 	envid_t env_ipc_from;		// envid of the sender
 	int env_ipc_perm;		// Perm of page mapping received
+                              
+                              
+    struct BreakPoint *bp;
+    size_t bpnum;
+    bool to_continue;
+
+    // used for exec
+    pde_t *exec_pgdir;
+};
+
+
+struct BreakPoint {
+    uintptr_t va;
+    unsigned char victim;
+    char padding[3];
 };
 
 #endif // !JOS_INC_ENV_H

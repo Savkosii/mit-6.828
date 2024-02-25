@@ -82,6 +82,7 @@ KERN_BINFILES +=	user/faultio\
 	      		user/testfile \
 			user/spawnhello \
 			user/icode \
+            user/exechello \
 			fs/fs
 
 # Binary files for LAB5
