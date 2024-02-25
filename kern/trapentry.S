@@ -51,7 +51,7 @@
     // We add the declaration of these handler functions in kern/trap.h.
     // IDT stores the address of these functions.
     TRAPHANDLER_NOEC(HANDLER_DIVIDE, 0)
-    TRAPHANDLER_NOEC(HANDLER_DEBUG, 1)
+    TRAPHANDLER(HANDLER_DEBUG, 1)
     TRAPHANDLER(HANDLER_NMI, 2)
     TRAPHANDLER_NOEC(HANDLER_BRKPT, 3)
     TRAPHANDLER(HANDLER_OFLOW, 4)

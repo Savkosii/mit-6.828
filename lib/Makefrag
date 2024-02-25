@@ -22,8 +22,7 @@ LIB_SRCFILES :=		$(LIB_SRCFILES) \
 			lib/file.c \
 			lib/fprintf.c \
 			lib/pageref.c \
-			lib/spawn.c  \
-			lib/exec.c
+			lib/spawn.c
 
 LIB_SRCFILES :=		$(LIB_SRCFILES) \
 			lib/pipe.c \

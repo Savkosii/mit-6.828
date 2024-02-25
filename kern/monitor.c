@@ -1,19 +1,12 @@
 // Simple command-line kernel monitor useful for
 // controlling the kernel and exploring the system interactively.
 
-#include "inc/env.h"
-#include "inc/lib.h"
-#include "inc/mmu.h"
-#include "inc/trap.h"
-#include "inc/types.h"
 #include <inc/stdio.h>
 #include <inc/string.h>
 #include <inc/memlayout.h>
 #include <inc/assert.h>
 #include <inc/x86.h>
 
-#include <kern/env.h>
-#include <kern/sched.h>
 #include <kern/console.h>
 #include <kern/monitor.h>
 #include <kern/pmap.h>
@@ -37,12 +30,6 @@ static struct Command commands[] = {
     { "vmmaps", "Display all of the physical page mappings that apply to a particular range of virtual/linear addresses", mon_vmmaps},
     { "setperm", "Set the permission of a page entry specified by virtual/linear address va", mon_setperm},
     { "dump", "Dump the n bytes at either a virtual or physical address.", mon_dump},
-    { "stepi", "Step to next instrution, only available if the process is attached by the kernel \
-        via int 0x3", mon_stepi },
-    { "si", "alias of stepi", mon_stepi },
-    { "continue", "continue the execution, only available if the process is attached by the kernel \
-        via int 0x3", mon_continue },
-    { "c", "alias of continue", mon_continue }
 };
 
 /***** Implementations of basic kernel monitor commands *****/
@@ -267,96 +254,6 @@ mon_dump(int argc, char **argv, struct Trapframe *tf)
     return 0;
 }
 
-int mon_stepi(int argc, char **argv, struct Trapframe *tf) {
-    if (argc != 1) {
-        cprintf("too many arguments\n");
-        return -1;
-    }
-    if (tf == NULL) {
-        cprintf("environment %x not attached\n", curenv->env_id);
-        return -1;
-    }
-    if (tf->tf_trapno != T_BRKPT && tf->tf_trapno != T_DEBUG) {
-        cprintf("environment %x not attached\n", curenv->env_id);
-        return -1;
-    }
-    tf->tf_eflags |= FL_TF;
-    sched_yield();
-    return -1;
-}
-
-int mon_continue(int argc, char **argv, struct Trapframe *tf) {
-    if (argc != 1) {
-        cprintf("too many arguments\n");
-        return -1;
-    }
-    if (tf == NULL) {
-        cprintf("environment %x not attached\n", curenv->env_id);
-        return -1;
-    }
-    if (tf->tf_trapno != T_BRKPT && tf->tf_trapno != T_DEBUG) {
-        cprintf("environment %x not attached\n", curenv->env_id);
-        return -1;
-    }
-    curenv->to_continue = true;
-    sched_yield();
-    return -1;
-}
-
-// env_run is responsible for validating the breakpoints
-int mon_break(int argc, char **argv, struct Trapframe *tf) {
-    int err;
-    if (argc != 2) {
-        cprintf("warning: invalid numbers of arguments\n");
-        return 0;
-    }
-    if (tf == NULL) {
-        cprintf("error: environment %x not attached\n", curenv->env_id);
-        return -1;
-    }
-    if (tf->tf_trapno != T_BRKPT && tf->tf_trapno != T_DEBUG) {
-        cprintf("error: environment %x not attached\n", curenv->env_id);
-        return -1;
-    }
-
-    void *va = argv[1];
-    if ((err = user_mem_check(curenv, va, 1, 0))) {
-        cprintf("warning: invalid breakpoint %x\n", va);
-        return 0;
-    }
-    struct PageInfo *pp;
-    if ((pp = page_lookup(curenv->env_pgdir, va, NULL)) == NULL) {
-        cprintf("warning: invalid breakpoint %x\n", va);
-        return 0;
-    }
-    if (curenv->bp == NULL) {
-        if ((err = env_breakpoints_alloc(curenv))) {
-            return err;
-        }
-    }
-    if (curenv->bpnum > MAX_BREAKPOINTS) {
-        cprintf("too many breakpoints\n");
-        return -1;
-    }
-    for (size_t i = 0; i < curenv->bpnum; i++) {
-        if (curenv->bp[i].va == (uintptr_t)va) {
-            cprintf("warning: duplicated breakpoint at 0x%x\n", va);
-            return 0;
-        }
-    }
-    unsigned char *victim = page2kva(pp) + PGOFF(va);
-    if (*victim == 0xcc) {
-        cprintf("warning: duplicated breakpoint at 0x%x\n", va);
-        return 0;
-    }
-    struct BreakPoint bp = {
-        (uintptr_t)va,
-        *victim,
-    };
-    curenv->bp[curenv->bpnum++] = bp;
-    return 0;
-}
-
 /***** Kernel monitor command interpreter *****/
 
 #define WHITESPACE "\t\r\n "
@@ -405,6 +302,18 @@ void
 monitor(struct Trapframe *tf)
 {
 	char *buf;
+
+	cprintf("Welcome to the JOS kernel monitor!\n");
+	cprintf("Type 'help' for a list of commands.\n");
+
+	if (tf != NULL) {
+		print_trapframe(tf);
+        if (tf->tf_trapno == T_BRKPT) {
+
+        }
+    }
+    
+
 	while (1) {
 		buf = readline("K> ");
 		if (buf != NULL)

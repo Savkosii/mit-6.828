@@ -1,11 +1,6 @@
 /* See COPYRIGHT for copyright information. */
 
 #include "env.h"
-#include "inc/env.h"
-#include "inc/memlayout.h"
-#include "inc/stdio.h"
-#include "inc/trap.h"
-#include "inc/types.h"
 #include "spinlock.h"
 #include <inc/x86.h>
 #include <inc/mmu.h>
@@ -276,11 +271,6 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
 	// Also clear the IPC receiving flag.
 	e->env_ipc_recving = 0;
 
-    e->bp = 0;
-    e->bpnum = 0;
-    e->to_continue = false;
-    e->exec_pgdir = 0;
-
 	// commit the allocation
 	env_free_list = e->env_link;
 	*newenv_store = e;
@@ -397,12 +387,9 @@ load_icode(struct Env *e, uint8_t *binary)
             region_alloc(e, (void *)ph->p_va, ph->p_memsz);
 
             memset((void *)ph->p_va, 0, ph->p_memsz);
-            memmove((void *)ph->p_va, (uint8_t *)elf + ph->p_offset, ph->p_filesz);
+            memcpy((void *)ph->p_va, (uint8_t *)elf + ph->p_offset, ph->p_filesz);
         }
     }
-      
-    // Switch back to the kernel address space
-    lcr3(PADDR(kern_pgdir));
 
     (e->env_tf).tf_eip = elf->e_entry;
 
@@ -415,6 +402,9 @@ load_icode(struct Env *e, uint8_t *binary)
         panic("load_icode: out of memory");
     }
     page_insert(e->env_pgdir, pp, (void *)USTACKTOP - PGSIZE, PTE_P | PTE_U | PTE_W);
+
+    // Switch back to the kernel address space
+    lcr3(PADDR(kern_pgdir));
 }
 
 //
@@ -427,6 +417,8 @@ load_icode(struct Env *e, uint8_t *binary)
 void
 env_create(uint8_t *binary, enum EnvType type)
 {
+
+      
 	// LAB 3: Your code here.
     int err;
     struct Env *e;
@@ -447,100 +439,58 @@ env_create(uint8_t *binary, enum EnvType type)
     }
 }
 
-int
-env_breakpoints_alloc(struct Env *e) {
-    struct PageInfo *pp;
-    if ((pp = page_alloc(0)) == NULL) {
-        return -E_NO_MEM;
-    }
-    e->bp = page2kva(pp);
-    e->bpnum = 0;
-    pp->pp_ref += 1;
-}
-
-void
-env_breakpoints_remove(struct Env *e) {
-    if (e->bp) {
-    	page_decref(pa2page(PADDR(e->bp)));
-        e->bp = NULL;
-        e->bpnum = 0;
-    }
-}
-
-int 
-env_alloc_pgdir(pde_t **pgdir_store) {
-    pde_t *pgdir;
-	struct PageInfo *pp;
-	if ((pp = page_alloc(ALLOC_ZERO)) == NULL) {
-		return -E_NO_MEM;
-    }
-    pgdir = (pde_t *)page2kva(pp);
-    pp->pp_ref += 1;
-    for (size_t pdx = 0; pdx < NPDENTRIES; pdx++) {
-        if (pdx < PDX(UTOP)) {
-            pgdir[pdx] = 0;
-            continue;
-        }
-        pgdir[pdx] = kern_pgdir[pdx];
-    }
-	pgdir[PDX(UVPT)] = PADDR(pgdir) | PTE_P | PTE_U;
-    *pgdir_store = pgdir;
-	return 0;
-}
-
-void
-env_free_pgdir(pde_t *pgdir) {
-	for (size_t pdx = 0; pdx < PDX(UTOP); pdx++) {
-		if (!(pgdir[pdx] & PTE_P)) {
-			continue;
-        }
-
-		physaddr_t pa = PTE_ADDR(pgdir[pdx]);
-		pte_t *pt = (pte_t*)KADDR(pa);
-		for (size_t ptx = 0; ptx < NPTENTRIES; ptx++) {
-			if (pt[ptx] & PTE_P) {
-		        page_remove(pgdir, PGADDR(pdx, ptx, 0));
-            }
-		}
-		pgdir[pdx] = 0;
-		page_decref(pa2page(pa));
-	}
-
-    // free the page directory itself
-	page_decref(pa2page(PADDR(pgdir)));
-}
-
 //
 // Frees env e and all memory it uses.
 //
 void
 env_free(struct Env *e)
 {
+	pte_t *pt;
+	uint32_t pdeno, pteno;
+	physaddr_t pa;
+
 	// If freeing the current environment, switch to kern_pgdir
 	// before freeing the page directory, just in case the page
 	// gets reused.
-	if (e == curenv) {
+	if (e == curenv)
 		lcr3(PADDR(kern_pgdir));
-    }
 
-    if (e->bp) {
-        env_breakpoints_remove(e);
-    }
+	// Note the environment's demise.
+	// cprintf("[%08x] free env %08x\n", curenv ? curenv->env_id : 0, e->env_id);
 
-    env_free_pgdir(e->env_pgdir);
-    e->env_pgdir = 0;
+	// Flush all mapped pages in the user portion of the address space
+	static_assert(UTOP % PTSIZE == 0);
+	for (pdeno = 0; pdeno < PDX(UTOP); pdeno++) {
 
-    if (e->exec_pgdir) {
-        env_free_pgdir(e->exec_pgdir);
-        e->exec_pgdir = 0;
-    }
+		// only look at mapped page tables
+		if (!(e->env_pgdir[pdeno] & PTE_P))
+			continue;
+
+		// find the pa and va of the page table
+		pa = PTE_ADDR(e->env_pgdir[pdeno]);
+		pt = (pte_t*) KADDR(pa);
+
+		// unmap all PTEs in this page table
+		for (pteno = 0; pteno <= PTX(~0); pteno++) {
+			if (pt[pteno] & PTE_P)
+				page_remove(e->env_pgdir, PGADDR(pdeno, pteno, 0));
+		}
+
+		// free the page table itself
+		e->env_pgdir[pdeno] = 0;
+		page_decref(pa2page(pa));
+	}
+
+	// free the page directory
+	pa = PADDR(e->env_pgdir);
+	e->env_pgdir = 0;
+	page_decref(pa2page(pa));
 
 	// return the environment to the free list
 	e->env_status = ENV_FREE;
 	e->env_link = env_free_list;
 	env_free_list = e;
 }
-
 
 //
 // Frees environment e.
@@ -622,28 +572,9 @@ env_run(struct Env *e)
         curenv->env_status = ENV_RUNNABLE;
         curenv->env_runs -= 1;
     }
-      
-    // validating all the breakpoints except for the current one
-    for (size_t i = 0; i < curenv->bpnum; i++) {
-        struct PageInfo *pp;
-        uintptr_t bp_va = curenv->bp[i].va;
-        if ((pp = page_lookup(curenv->env_pgdir, (void *)bp_va, 0)) == NULL) {
-            cprintf("warning: unreachable breakpoint at 0x%x\n", bp_va);
-            continue;
-        }
-        if (e->env_tf.tf_trapno == T_BRKPT && bp_va == e->env_tf.tf_eip) {
-            continue;
-        }
-        unsigned char *victim = page2kva(pp) + PGOFF(bp_va); 
-        e->bp[i].victim = *victim;
-        *victim = 0xcc;
-    }
-
     curenv = e;
     curenv->env_status = ENV_RUNNING;
     curenv->env_runs += 1;
-
-
     // Restores the paging.
     // Since the user mapping above UTOP is identical to 
     // that of the kernel, it is ok to dereference e.

@@ -1,7 +1,5 @@
 // implement fork from user space
 
-#include "inc/memlayout.h"
-#include "inc/mmu.h"
 #include <inc/string.h>
 #include <inc/lib.h>
 
@@ -155,7 +153,7 @@ fork(void)
 		thisenv = &envs[ENVX(sys_getenvid())];
 		return 0;
     }
-
+      
     //
     // Parent only
     // 
@@ -166,7 +164,7 @@ fork(void)
         }
         for (size_t ptx = 0; ptx < NPTENTRIES; ptx++) {
             size_t pn = pdx * NPTENTRIES + ptx;
-            // Do not map child's user exception stack.
+            // Do not map child's user exception stack. 
             // We will allocate a new page for it instead.
             if (pn == PGNUM(UXSTACKTOP - PGSIZE)) {
                 continue;
@@ -199,77 +197,10 @@ fork(void)
     return envid;
 }
 
-static int
-sduppage(envid_t envid, unsigned pn)
-{
-	int r;
-
-    volatile pte_t *pte = &uvpt[pn];
-    int perm = *pte & PTE_SYSCALL;
-    bool remap = 0;
-    // return silently if page pn is not mapped
-    if (!(*pte & PTE_P)) {
-        return 0;
-    }
-    // mark stack page as Copy-On-Write
-    if (pn == PGNUM(USTACKTOP - PGSIZE)) {
-        perm &= ~PTE_W;
-        perm |= PTE_COW;
-        remap = 1;
-    }
-    void *va = (void *)(pn * PGSIZE);
-    if ((r = sys_page_map(0, va, envid, va, perm))) {
-        return r;
-    }
-    if (remap && (r = sys_page_map(0, va, 0, va, perm))) {
-        return r;
-    }
-	return 0;
-}
-
 // Challenge!
 int
 sfork(void)
 {
-    int err;
-    envid_t envid;
-    set_pgfault_handler(pgfault);
-    if ((envid = sys_exofork()) < 0) {
-        return envid;
-    }
-      
-    if (envid == 0) {
-        // 
-		thisenv = &envs[ENVX(sys_getenvid())];
-		return 0;
-    }
-
-    for (size_t pdx = 0; pdx < PDX(UTOP); pdx++) {
-        volatile pde_t *pde = &uvpd[pdx];
-        if (!(*pde & PTE_P)) {
-            continue;
-        }
-        for (size_t ptx = 0; ptx < NPTENTRIES; ptx++) {
-            size_t pn = pdx * NPTENTRIES + ptx;
-            if ((err = duppage(envid, pn))) {
-                return err;
-            }
-        }
-    }
-
-    // Set the parent's pgfault upcall to the child 
-    // (modify child's env_pgfault_upcall field in kernel).
-    // It is ok to do so since they share one program data space.
-    extern void _pgfault_upcall(void);
-    if ((err = sys_env_set_pgfault_upcall(envid, _pgfault_upcall))) {
-        return err;
-    }
-
-    // Mark the child as runnable
-    // if the environment is not set up appropriately, 
-    // then child might be spawned as well, but it can fault easily.
-    if ((err = sys_env_set_status(envid, ENV_RUNNABLE))) {
-        return err;
-    }
-    return envid;
+	panic("sfork not implemented");
+	return -E_INVAL;
 }
