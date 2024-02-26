@@ -6,12 +6,15 @@
 #include <inc/memlayout.h>
 #include <inc/assert.h>
 #include <inc/x86.h>
+#include <inc/env.h>
 
 #include <kern/console.h>
 #include <kern/monitor.h>
 #include <kern/pmap.h>
 #include <kern/kdebug.h>
 #include <kern/trap.h>
+#include <kern/env.h>
+#include <kern/sched.h>
 
 #define CMDBUF_SIZE	80	// enough for one VGA text line
 
@@ -29,7 +32,16 @@ static struct Command commands[] = {
     { "backtrace", "Dump the debug info of the current instruction", mon_backtrace },
     { "vmmaps", "Display all of the physical page mappings that apply to a particular range of virtual/linear addresses", mon_vmmaps},
     { "setperm", "Set the permission of a page entry specified by virtual/linear address va", mon_setperm},
-    { "dump", "Dump the n bytes at either a virtual or physical address.", mon_dump},
+    { "dump", "Dump the n bytes at virtual address.", mon_dump},
+
+    { "break", "Set breakpoint", mon_break },
+    { "b", "alias of break", mon_break },
+    { "stepi", "Step to next instrution, only available if the process is attached by the kernel \
+        via int 0x3", mon_stepi },
+    { "si", "alias of stepi", mon_stepi },
+    { "continue", "continue the execution, only available if the process is attached by the kernel \
+        via int 0x3", mon_continue },
+    { "c", "alias of continue", mon_continue }
 };
 
 /***** Implementations of basic kernel monitor commands *****/
@@ -193,10 +205,6 @@ mon_setperm(int argc, char **argv, struct Trapframe *tf)
     return 0;
 }
 
-// If va maps pa, then dumping k bytes at va and pa might have different result.
-// 
-// We should expect the former result as the "correct" one, as virtual memory
-// are what users believe they "have" instead of physical memory.
 int
 mon_dump(int argc, char **argv, struct Trapframe *tf)
 {
@@ -220,37 +228,119 @@ mon_dump(int argc, char **argv, struct Trapframe *tf)
         cprintf("dump: invalid physical memory range\n");
         return -1;
     }
+
     int printed = 0;
-    // handle virtual address case
-    if (p >= npages * PGSIZE) {
-        while ((pte = pgdir_walk(kern_pgdir, (void *)p, 0)) != NULL && *pte != 0) {
-            uint32_t pgoff = PGOFF((void *)p);
-            physaddr_t pa = PTE_ADDR(*pte) + pgoff;
-            char *va = KADDR(pa);
-            for (; pgoff < PGSIZE && count != 0; p++, pgoff++, count--) {
-                cprintf("%d ", *va++);
-                printed = 1;
-            }
-            if (count == 0) {
-                cprintf("\n");
-                return 0;
-            }
+    while ((pte = pgdir_walk(curenv->env_pgdir, (void *)p, 0)) != NULL && *pte != 0) {
+        uint32_t pgoff = PGOFF((void *)p);
+        physaddr_t pa = PTE_ADDR(*pte) + pgoff;
+        unsigned char *va = KADDR(pa);
+        for (; pgoff < PGSIZE && count != 0; p++, pgoff++, count--) {
+            cprintf("%d ", *va++);
+            printed = 1;
         }
-        if (printed) {
+        if (count == 0) {
             cprintf("\n");
+            return 0;
         }
-        // if there is no physical memory mapped by virtural address p + k, 
-        // then dumping k + 1 bytes at p should trigger error
-        cprintf("dump: invalid address %08x\n", p);
+    }
+    if (printed) {
+        cprintf("\n");
+    }
+    // if there is no physical memory mapped by virtural address p + k, 
+    // then dumping k + 1 bytes at p should trigger error
+    cprintf("dump: invalid address %08x\n", p);
+    return -1;
+}
+
+
+int mon_stepi(int argc, char **argv, struct Trapframe *tf) {
+    if (argc != 1) {
+        cprintf("too many arguments\n");
+        return -1;
+    }
+    if (tf == NULL) {
+        cprintf("environment %x not attached\n", curenv->env_id);
+        return -1;
+    }
+    if (tf->tf_trapno != T_BRKPT && tf->tf_trapno != T_DEBUG) {
+        cprintf("environment %x not attached\n", curenv->env_id);
+        return -1;
+    }
+    tf->tf_eflags |= FL_TF;
+    sched_yield();
+    return -1;
+}
+
+int mon_continue(int argc, char **argv, struct Trapframe *tf) {
+    if (argc != 1) {
+        cprintf("too many arguments\n");
+        return -1;
+    }
+    if (tf == NULL) {
+        cprintf("environment %x not attached\n", curenv->env_id);
+        return -1;
+    }
+    if (tf->tf_trapno != T_BRKPT && tf->tf_trapno != T_DEBUG) {
+        cprintf("environment %x not attached\n", curenv->env_id);
+        return -1;
+    }
+    tf->tf_eflags &= ~FL_TF;
+    curenv->to_continue = true;
+    sched_yield();
+    return -1;
+}
+
+// env_run is responsible for validating the breakpoints
+int mon_break(int argc, char **argv, struct Trapframe *tf) {
+    int err;
+    if (argc != 2) {
+        cprintf("warning: invalid numbers of arguments\n");
+        return 0;
+    }
+    if (tf == NULL) {
+        cprintf("error: environment %x not attached\n", curenv->env_id);
+        return -1;
+    }
+    if (tf->tf_trapno != T_BRKPT && tf->tf_trapno != T_DEBUG) {
+        cprintf("error: environment %x not attached\n", curenv->env_id);
         return -1;
     }
 
-    // handle physical address case
-    char *va = KADDR(p);
-    for (size_t i = 0; i < count; i++) {
-        cprintf("%d ", va[i]);
+    void *va = (void *)strtol(argv[1], NULL, 16);
+    if ((err = user_mem_check(curenv, va, 1, 0))) {
+        cprintf("warning: invalid breakpoint %x\n", va);
+        return 0;
     }
-    cprintf("\n");
+    struct PageInfo *pp;
+    if ((pp = page_lookup(curenv->env_pgdir, va, NULL)) == NULL) {
+        cprintf("warning: invalid breakpoint %x\n", va);
+        return 0;
+    }
+    if (curenv->bp == NULL) {
+        if ((err = env_breakpoints_alloc(curenv))) {
+            return err;
+        }
+    }
+    if (curenv->bpnum > MAX_BREAKPOINTS) {
+        cprintf("too many breakpoints\n");
+        return -1;
+    }
+    for (size_t i = 0; i < curenv->bpnum; i++) {
+        if (curenv->bp[i].va == (uintptr_t)va) {
+            cprintf("warning: duplicated breakpoint at 0x%x\n", va);
+            return 0;
+        }
+    }
+    unsigned char *victim = page2kva(pp) + PGOFF(va);
+    if (*victim == 0xcc) {
+        cprintf("warning: duplicated breakpoint at 0x%x\n", va);
+        return 0;
+    }
+    struct BreakPoint bp = {
+        (uintptr_t)va,
+        *victim,
+    };
+    curenv->bp[curenv->bpnum++] = bp;
     return 0;
 }
 
@@ -308,9 +398,6 @@ monitor(struct Trapframe *tf)
 
 	if (tf != NULL) {
 		print_trapframe(tf);
-        if (tf->tf_trapno == T_BRKPT) {
-
-        }
     }
     
 

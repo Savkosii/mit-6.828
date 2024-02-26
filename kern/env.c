@@ -620,6 +620,24 @@ env_run(struct Env *e)
         curenv->env_status = ENV_RUNNABLE;
         curenv->env_runs -= 1;
     }
+    
+    // validating all the breakpoints except for the current one
+    for (size_t i = 0; i < e->bpnum; i++) {
+        struct PageInfo *pp;
+        uintptr_t bp_va = e->bp[i].va;
+        if ((pp = page_lookup(e->env_pgdir, (void *)bp_va, 0)) == NULL) {
+            cprintf("warning: unreachable breakpoint at 0x%x\n", bp_va);
+            continue;
+        }
+        if (e->env_tf.tf_trapno == T_BRKPT && bp_va == e->env_tf.tf_eip) {
+            continue;
+        }
+        unsigned char *victim = page2kva(pp) + PGOFF(bp_va); 
+        e->bp[i].victim = *victim;
+        *victim = 0xcc;
+    }
+
+
     curenv = e;
     curenv->env_status = ENV_RUNNING;
     curenv->env_runs += 1;

@@ -29,6 +29,9 @@ typedef int32_t envid_t;
 #define NENV			(1 << LOG2NENV)
 #define ENVX(envid)		((envid) & (NENV - 1))
 
+
+#define MAX_BREAKPOINTS ((PGSIZE) / (sizeof(struct BreakPoint)))
+
 // Values of env_status in struct Env
 enum {
 	ENV_FREE = 0,

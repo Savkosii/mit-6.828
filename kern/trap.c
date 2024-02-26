@@ -240,6 +240,27 @@ print_regs(struct PushRegs *regs)
 static void
 trap_dispatch(struct Trapframe *tf)
 {
+    // invalidating all the breakpoints
+    // note: env_run is responsible to revalidating them
+    if (curenv != NULL) {
+        for (size_t i = 0; i < curenv->bpnum; i++) {
+            struct PageInfo *pp;
+            uintptr_t bp_va = curenv->bp[i].va;
+            if ((pp = page_lookup(curenv->env_pgdir, (void *)bp_va, 0)) == NULL) {
+                cprintf("warning: unreachable breakpoint at 0x%x\n", bp_va);
+                continue;
+            }
+            unsigned char *victim = page2kva(pp) + PGOFF(bp_va); 
+            *victim = curenv->bp[i].victim;
+            // make sure the breakpoint is the one set by the kernel monitor 
+            // instead of int 0x3.
+            if (tf->tf_trapno == T_BRKPT && tf->tf_eip - 1 == bp_va) {
+                tf->tf_eip -= 1;
+            }
+        }
+    }
+
+
 	// Handle processor exceptions.
 	// LAB 3: Your code here.
     if (tf->tf_trapno == T_PGFLT) {
@@ -247,10 +268,17 @@ trap_dispatch(struct Trapframe *tf)
         return;
     } 
 
-    if (tf->tf_trapno == T_BRKPT) {
+    if (tf->tf_trapno == T_DEBUG || tf->tf_trapno == T_BRKPT) {
+        if (0 && curenv->to_continue) {
+            tf->tf_eflags &= ~FL_TF;
+            curenv->to_continue = false;
+            sched_yield();
+        }
+        cprintf("Environment [%x] stopped at 0x%x\n", curenv->env_id, tf->tf_eip);
         monitor(tf);
         return;
-    } 
+    }
+
 
     if (tf->tf_trapno == T_SYSCALL) {
         uint32_t syscallno, ret;
