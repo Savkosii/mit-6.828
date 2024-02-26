@@ -269,11 +269,6 @@ trap_dispatch(struct Trapframe *tf)
     } 
 
     if (tf->tf_trapno == T_DEBUG || tf->tf_trapno == T_BRKPT) {
-        if (0 && curenv->to_continue) {
-            tf->tf_eflags &= ~FL_TF;
-            curenv->to_continue = false;
-            sched_yield();
-        }
         cprintf("Environment [%x] stopped at 0x%x\n", curenv->env_id, tf->tf_eip);
         monitor(tf);
         return;

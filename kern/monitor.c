@@ -285,7 +285,6 @@ int mon_continue(int argc, char **argv, struct Trapframe *tf) {
         return -1;
     }
     tf->tf_eflags &= ~FL_TF;
-    curenv->to_continue = true;
     sched_yield();
     return -1;
 }

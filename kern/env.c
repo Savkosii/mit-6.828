@@ -274,7 +274,6 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
 
     e->bp = 0;
     e->bpnum = 0;
-    e->to_continue = false;
     e->exec_pgdir = 0;
 
 	// commit the allocation

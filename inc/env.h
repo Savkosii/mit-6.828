@@ -73,7 +73,6 @@ struct Env {
                               
     struct BreakPoint *bp;
     size_t bpnum;
-    bool to_continue;
 
     // used for exec
     pde_t *exec_pgdir;
