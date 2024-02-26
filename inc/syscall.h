@@ -17,7 +17,15 @@ enum {
 	SYS_yield,
 	SYS_ipc_try_send,
 	SYS_ipc_recv,
+
+    SYS_exec_config_pgdir_alloc,
+    SYS_exec_config_page_alloc,
+    SYS_exec_config_page_map,
+    SYS_exec_config_page_unmap,
+    SYS_exec,
+
 	SYS_time_msec,
+
 	NSYSCALLS
 };
 

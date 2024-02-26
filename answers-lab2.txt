@@ -1,0 +1,169 @@
+Answer of challenging problems:
+
+int
+mon_vmmaps(int argc, char **argv, struct Trapframe *tf)
+{
+    if (argc != 2 && argc != 3) {
+        cprintf("vmmaps: invalid numbers of arguments\n");
+        return -1;
+    }
+    pte_t *pte;
+    uintptr_t start;
+    uintptr_t end;
+    end = start = strtol(argv[1], NULL, 16);
+    if (argc == 3) {
+        end = strtol(argv[2], NULL, 16);
+    } 
+    if (end < start) {
+        cprintf("vmmaps: invalid range\n");
+    }
+    int off_start = PGOFF(start);
+    int off_end = PGOFF(end);
+    cprintf("%5s%9s%9s%9s%9s%9s\n", "va", "ptx", "pdx", "pgoff", "pa", "perm");
+    for (uintptr_t va = start; va <= end; va += PGSIZE) {
+        if ((pte = pgdir_walk(kern_pgdir, (void *)va, 0)) == NULL || *pte == 0) {
+            cprintf("%08x%5s%9s%9s%9s%9s\n", va, "-", "-", "-", "-", "-");
+        } else {
+            size_t pdx = PDX(va);
+            size_t ptx = PTX(va);
+            size_t pgoff = PGOFF(va);
+            physaddr_t pa = pgoff + PTE_ADDR(*pte);
+            char perm[] = {0};
+            if (*pte & PTE_P) {
+                strcat(perm, "P");
+            }
+            if (*pte & PTE_W) {
+                strcat(perm, "W");
+            }
+            if (*pte & PTE_U) {
+                strcat(perm, "U");
+            }
+            if (*pte & PTE_A) {
+                strcat(perm, "A");
+            }
+            if (*pte & PTE_D) {
+                strcat(perm, "D");
+            }
+            if (*pte & PTE_G) {
+                strcat(perm, "G");
+            }
+            if (*perm == 0) {
+                strcat(perm, "-");
+            }
+            cprintf("%08x %08x %08x %08x %08x%5s\n", va, pdx, ptx, pgoff, pa, perm);
+        }
+        if (va <= end && off_start) {
+            off_start = 0;
+            va = ROUNDDOWN(va, PGSIZE);
+        }
+        if (va + PGSIZE > end && off_end && start != end) {
+            off_end = 0;
+            va = end - PGSIZE;
+        }
+        // in case of int overflow
+        if (va + PGSIZE < va) {
+            break;
+        }
+    }
+	return 0;
+}
+
+int
+mon_setperm(int argc, char **argv, struct Trapframe *tf)
+{
+    if (argc != 3) {
+        cprintf("setperm: invalid numbers of arguments\n");
+        return -1;
+    }
+    pte_t *pte;
+    int perm = 0;
+    uintptr_t va = strtol(argv[1], NULL, 16);
+    if ((pte = pgdir_walk(kern_pgdir, (void *)va, 0)) == NULL || *pte == 0) {
+        cprintf("setperm: no such a page refered by %08x", va);
+        return -1;
+    }
+    for (char *p = argv[2]; *p != 0; p++) {
+        if (*p == 'P' || *p == 'p') {
+            perm |= PTE_P;
+        } else if (*p == 'U' || *p == 'u') {
+            perm |= PTE_U;
+        } else if (*p == 'W' || *p == 'w') {
+            perm |= PTE_W;
+        } else if (*p == 'A' || *p == 'a') {
+            perm |= PTE_A;
+        } else if (*p == 'G' || *p == 'g') {
+            perm |= PTE_G;
+        } else if (*p == 'D' || *p == 'd') {
+            perm |= PTE_D;
+        } else if (*p == '-' || *p == '0') {
+            continue;
+        } else {
+            cprintf("setperm: invalid permission indicator %c\n", *p);
+            return -1;
+        }
+    }
+    *pte = perm;
+    return 0;
+}
+
+// If va maps pa, then dumping k bytes at va and pa might have different result.
+// 
+// We should expect the former result as the "correct" one, as virtual memory
+// are what users believe they "have" instead of physical memory.
+int
+mon_dump(int argc, char **argv, struct Trapframe *tf)
+{
+    if (argc != 2 && argc != 3) {
+        cprintf("dump: invalid numbers of arguments\n");
+        return -1;
+    }
+    pte_t *pte;
+    uint32_t p = strtol(argv[1], NULL, 16);
+    int32_t count = 4;
+    if (argc == 3 && (count = strtol(argv[2], NULL, 10)) <= 0) {
+        cprintf("dump: invalid count\n");
+        return -1;
+    }
+    uint32_t end = p + count;
+    if (end < p) {
+        cprintf("dump: address overflow\n");
+        return -1;
+    }
+    if (end >= npages * PGSIZE && p < npages * PGSIZE) {
+        cprintf("dump: invalid physical memory range\n");
+        return -1;
+    }
+    int printed = 0;
+    // handle virtual address case
+    if (p >= npages * PGSIZE) {
+        while ((pte = pgdir_walk(kern_pgdir, (void *)p, 0)) != NULL && *pte != 0) {
+            uint32_t pgoff = PGOFF((void *)p);
+            physaddr_t pa = PTE_ADDR(*pte) + pgoff;
+            char *va = KADDR(pa);
+            for (; pgoff < PGSIZE && count != 0; p++, pgoff++, count--) {
+                cprintf("%d ", *va++);
+                printed = 1;
+            }
+            if (count == 0) {
+                cprintf("\n");
+                return 0;
+            }
+        }
+        if (printed) {
+            cprintf("\n");
+        }
+        // if there is no physical memory mapped by virtural address p + k, 
+        // then dumping k + 1 bytes at p should trigger error
+        cprintf("dump: invalid address %08x\n", p);
+        return -1;
+    }
+
+    // handle physical address case
+    char *va = KADDR(p);
+    for (size_t i = 0; i < count; i++) {
+        cprintf("%d ", va[i]);
+    }
+    cprintf("\n");
+    return 0;
+}
+

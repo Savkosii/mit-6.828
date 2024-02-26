@@ -6,11 +6,15 @@
 #include <inc/memlayout.h>
 #include <inc/assert.h>
 #include <inc/x86.h>
+#include <inc/env.h>
 
 #include <kern/console.h>
 #include <kern/monitor.h>
+#include <kern/pmap.h>
 #include <kern/kdebug.h>
 #include <kern/trap.h>
+#include <kern/env.h>
+#include <kern/sched.h>
 
 #define CMDBUF_SIZE	80	// enough for one VGA text line
 
@@ -25,6 +29,19 @@ struct Command {
 static struct Command commands[] = {
 	{ "help", "Display this list of commands", mon_help },
 	{ "kerninfo", "Display information about the kernel", mon_kerninfo },
+    { "backtrace", "Dump the debug info of the current instruction", mon_backtrace },
+    { "vmmaps", "Display all of the physical page mappings that apply to a particular range of virtual/linear addresses", mon_vmmaps},
+    { "setperm", "Set the permission of a page entry specified by virtual/linear address va", mon_setperm},
+    { "dump", "Dump the n bytes at virtual address.", mon_dump},
+
+    { "break", "Set breakpoint", mon_break },
+    { "b", "alias of break", mon_break },
+    { "stepi", "Step to next instrution, only available if the process is attached by the kernel \
+        via int 0x3", mon_stepi },
+    { "si", "alias of stepi", mon_stepi },
+    { "continue", "continue the execution, only available if the process is attached by the kernel \
+        via int 0x3", mon_continue },
+    { "c", "alias of continue", mon_continue }
 };
 
 /***** Implementations of basic kernel monitor commands *****/
@@ -59,10 +76,272 @@ int
 mon_backtrace(int argc, char **argv, struct Trapframe *tf)
 {
 	// Your code here.
+    cprintf("Stack backtrace:\n");
+    uint32_t ebp = read_ebp();
+    while (ebp != 0) {
+        uint32_t eip = *(uint32_t *)((void *)ebp + 4);
+        uint32_t arg1 = *(uint32_t *)((void *)ebp + 8);
+        uint32_t arg2 = *(uint32_t *)((void *)ebp + 12);
+        uint32_t arg3 = *(uint32_t *)((void *)ebp + 16);
+        uint32_t arg4 = *(uint32_t *)((void *)ebp + 20);
+        uint32_t arg5 = *(uint32_t *)((void *)ebp + 24);
+        cprintf("  ");
+        cprintf("ebp %08x  eip %08x  args %08x %08x %08x %08x %08x\n", ebp, eip, arg1, arg2, arg3, arg4, arg5);
+        struct Eipdebuginfo info;
+        debuginfo_eip(eip, &info);
+        cprintf("         ");
+        cprintf("%s:%u: %.*s+%u\n", info.eip_file, info.eip_line, 
+               info.eip_fn_namelen, info.eip_fn_name, eip - info.eip_fn_addr);
+        ebp = *(uint32_t *)ebp;
+    }
+
 	return 0;
 }
 
 
+int
+mon_vmmaps(int argc, char **argv, struct Trapframe *tf)
+{
+    if (argc != 2 && argc != 3) {
+        cprintf("vmmaps: invalid numbers of arguments\n");
+        return -1;
+    }
+    pte_t *pte;
+    uintptr_t start;
+    uintptr_t end;
+    end = start = strtol(argv[1], NULL, 16);
+    if (argc == 3) {
+        end = strtol(argv[2], NULL, 16);
+    } 
+    if (end < start) {
+        cprintf("vmmaps: invalid range\n");
+    }
+    int off_start = PGOFF(start);
+    int off_end = PGOFF(end);
+    cprintf("%5s%9s%9s%9s%9s%9s\n", "va", "ptx", "pdx", "pgoff", "pa", "perm");
+    for (uintptr_t va = start; va <= end; va += PGSIZE) {
+        if ((pte = pgdir_walk(kern_pgdir, (void *)va, 0)) == NULL || *pte == 0) {
+            cprintf("%08x%5s%9s%9s%9s%9s\n", va, "-", "-", "-", "-", "-");
+        } else {
+            size_t pdx = PDX(va);
+            size_t ptx = PTX(va);
+            size_t pgoff = PGOFF(va);
+            physaddr_t pa = pgoff + PTE_ADDR(*pte);
+            char perm[] = {0};
+            if (*pte & PTE_P) {
+                strcat(perm, "P");
+            }
+            if (*pte & PTE_W) {
+                strcat(perm, "W");
+            }
+            if (*pte & PTE_U) {
+                strcat(perm, "U");
+            }
+            if (*pte & PTE_A) {
+                strcat(perm, "A");
+            }
+            if (*pte & PTE_D) {
+                strcat(perm, "D");
+            }
+            if (*pte & PTE_G) {
+                strcat(perm, "G");
+            }
+            if (*perm == 0) {
+                strcat(perm, "-");
+            }
+            cprintf("%08x %08x %08x %08x %08x%5s\n", va, pdx, ptx, pgoff, pa, perm);
+        }
+        if (va <= end && off_start) {
+            off_start = 0;
+            va = ROUNDDOWN(va, PGSIZE);
+        }
+        if (va + PGSIZE > end && off_end && start != end) {
+            off_end = 0;
+            va = end - PGSIZE;
+        }
+        // in case of int overflow
+        if (va + PGSIZE < va) {
+            break;
+        }
+    }
+	return 0;
+}
+
+int
+mon_setperm(int argc, char **argv, struct Trapframe *tf)
+{
+    if (argc != 3) {
+        cprintf("setperm: invalid numbers of arguments\n");
+        return -1;
+    }
+    pte_t *pte;
+    int perm = 0;
+    uintptr_t va = strtol(argv[1], NULL, 16);
+    if ((pte = pgdir_walk(kern_pgdir, (void *)va, 0)) == NULL || *pte == 0) {
+        cprintf("setperm: no such a page refered by %08x", va);
+        return -1;
+    }
+    for (char *p = argv[2]; *p != 0; p++) {
+        if (*p == 'P' || *p == 'p') {
+            perm |= PTE_P;
+        } else if (*p == 'U' || *p == 'u') {
+            perm |= PTE_U;
+        } else if (*p == 'W' || *p == 'w') {
+            perm |= PTE_W;
+        } else if (*p == 'A' || *p == 'a') {
+            perm |= PTE_A;
+        } else if (*p == 'G' || *p == 'g') {
+            perm |= PTE_G;
+        } else if (*p == 'D' || *p == 'd') {
+            perm |= PTE_D;
+        } else if (*p == '-' || *p == '0') {
+            continue;
+        } else {
+            cprintf("setperm: invalid permission indicator %c\n", *p);
+            return -1;
+        }
+    }
+    *pte = perm;
+    return 0;
+}
+
+int
+mon_dump(int argc, char **argv, struct Trapframe *tf)
+{
+    if (argc != 2 && argc != 3) {
+        cprintf("dump: invalid numbers of arguments\n");
+        return -1;
+    }
+    pte_t *pte;
+    uint32_t p = strtol(argv[1], NULL, 16);
+    int32_t count = 4;
+    if (argc == 3 && (count = strtol(argv[2], NULL, 10)) <= 0) {
+        cprintf("dump: invalid count\n");
+        return -1;
+    }
+    uint32_t end = p + count;
+    if (end < p) {
+        cprintf("dump: address overflow\n");
+        return -1;
+    }
+    if (end >= npages * PGSIZE && p < npages * PGSIZE) {
+        cprintf("dump: invalid physical memory range\n");
+        return -1;
+    }
+
+    int printed = 0;
+    while ((pte = pgdir_walk(curenv->env_pgdir, (void *)p, 0)) != NULL && *pte != 0) {
+        uint32_t pgoff = PGOFF((void *)p);
+        physaddr_t pa = PTE_ADDR(*pte) + pgoff;
+        unsigned char *va = KADDR(pa);
+        for (; pgoff < PGSIZE && count != 0; p++, pgoff++, count--) {
+            cprintf("%d ", *va++);
+            printed = 1;
+        }
+        if (count == 0) {
+            cprintf("\n");
+            return 0;
+        }
+    }
+    if (printed) {
+        cprintf("\n");
+    }
+    // if there is no physical memory mapped by virtural address p + k, 
+    // then dumping k + 1 bytes at p should trigger error
+    cprintf("dump: invalid address %08x\n", p);
+    return -1;
+}
+
+
+int mon_stepi(int argc, char **argv, struct Trapframe *tf) {
+    if (argc != 1) {
+        cprintf("too many arguments\n");
+        return -1;
+    }
+    if (tf == NULL) {
+        cprintf("environment %x not attached\n", curenv->env_id);
+        return -1;
+    }
+    if (tf->tf_trapno != T_BRKPT && tf->tf_trapno != T_DEBUG) {
+        cprintf("environment %x not attached\n", curenv->env_id);
+        return -1;
+    }
+    tf->tf_eflags |= FL_TF;
+    sched_yield();
+    return -1;
+}
+
+int mon_continue(int argc, char **argv, struct Trapframe *tf) {
+    if (argc != 1) {
+        cprintf("too many arguments\n");
+        return -1;
+    }
+    if (tf == NULL) {
+        cprintf("environment %x not attached\n", curenv->env_id);
+        return -1;
+    }
+    if (tf->tf_trapno != T_BRKPT && tf->tf_trapno != T_DEBUG) {
+        cprintf("environment %x not attached\n", curenv->env_id);
+        return -1;
+    }
+    tf->tf_eflags &= ~FL_TF;
+    sched_yield();
+    return -1;
+}
+
+// env_run is responsible for validating the breakpoints
+int mon_break(int argc, char **argv, struct Trapframe *tf) {
+    int err;
+    if (argc != 2) {
+        cprintf("warning: invalid numbers of arguments\n");
+        return 0;
+    }
+    if (tf == NULL) {
+        cprintf("error: environment %x not attached\n", curenv->env_id);
+        return -1;
+    }
+    if (tf->tf_trapno != T_BRKPT && tf->tf_trapno != T_DEBUG) {
+        cprintf("error: environment %x not attached\n", curenv->env_id);
+        return -1;
+    }
+
+    void *va = (void *)strtol(argv[1], NULL, 16);
+    if ((err = user_mem_check(curenv, va, 1, 0))) {
+        cprintf("warning: invalid breakpoint %x\n", va);
+        return 0;
+    }
+    struct PageInfo *pp;
+    if ((pp = page_lookup(curenv->env_pgdir, va, NULL)) == NULL) {
+        cprintf("warning: invalid breakpoint %x\n", va);
+        return 0;
+    }
+    if (curenv->bp == NULL) {
+        if ((err = env_breakpoints_alloc(curenv))) {
+            return err;
+        }
+    }
+    if (curenv->bpnum > MAX_BREAKPOINTS) {
+        cprintf("too many breakpoints\n");
+        return -1;
+    }
+    for (size_t i = 0; i < curenv->bpnum; i++) {
+        if (curenv->bp[i].va == (uintptr_t)va) {
+            cprintf("warning: duplicated breakpoint at 0x%x\n", va);
+            return 0;
+        }
+    }
+    unsigned char *victim = page2kva(pp) + PGOFF(va);
+    if (*victim == 0xcc) {
+        cprintf("warning: duplicated breakpoint at 0x%x\n", va);
+        return 0;
+    }
+    struct BreakPoint bp = {
+        (uintptr_t)va,
+        *victim,
+    };
+    curenv->bp[curenv->bpnum++] = bp;
+    return 0;
+}
 
 /***** Kernel monitor command interpreter *****/
 
@@ -116,8 +395,10 @@ monitor(struct Trapframe *tf)
 	cprintf("Welcome to the JOS kernel monitor!\n");
 	cprintf("Type 'help' for a list of commands.\n");
 
-	if (tf != NULL)
+	if (tf != NULL) {
 		print_trapframe(tf);
+    }
+    
 
 	while (1) {
 		buf = readline("K> ");
