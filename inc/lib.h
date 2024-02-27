@@ -60,6 +60,8 @@ int	sys_page_unmap(envid_t env, void *pg);
 int	sys_ipc_try_send(envid_t to_env, uint32_t value, void *pg, int perm);
 int	sys_ipc_recv(void *rcv_pg);
 unsigned int sys_time_msec(void);
+int sys_transmit_packet(void *va, size_t n);
+ssize_t sys_recv_packet(void *va, size_t max_n);
 
 int sys_exec_config_pgdir_alloc(envid_t envid);
 int sys_exec_config_page_alloc(envid_t envid, void *va, int perm);

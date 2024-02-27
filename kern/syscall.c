@@ -1,6 +1,5 @@
 /* See COPYRIGHT for copyright information. */
 
-#include "env.h"
 #include <inc/x86.h>
 #include <inc/error.h>
 #include <inc/string.h>
@@ -13,6 +12,8 @@
 #include <kern/console.h>
 #include <kern/sched.h>
 #include <kern/time.h>
+
+#include <kern/e1000.h>
 
 // Print a string to the system console.
 // The string is exactly 'len' characters long.
@@ -547,7 +548,19 @@ static int
 sys_time_msec(void)
 {
 	// LAB 6: Your code here.
-	panic("sys_time_msec not implemented");
+    return time_msec();
+}
+
+static int
+sys_transmit_packet(void *va, size_t n) {
+    user_mem_assert(curenv, va, n, 0);
+    return transmit_packet(va, n);
+}
+
+static int
+sys_recv_packet(void *va, size_t max_n) {
+    user_mem_assert(curenv, va, max_n, PTE_W);
+    return recv_packet(va, max_n);
 }
 
 // Dispatches to the correct kernel function, passing the arguments.
@@ -617,6 +630,15 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, 
 
         case SYS_exec:
             return sys_exec((envid_t)a1, (struct Trapframe *)a2);
+
+        case SYS_time_msec:
+            return sys_time_msec();
+
+        case SYS_transmit_packet:
+            return sys_transmit_packet((void *)a1, (size_t)a2);
+
+        case SYS_recv_packet:
+            return sys_recv_packet((void *)a1, (size_t)a2);
 
         default:
             return -E_INVAL;

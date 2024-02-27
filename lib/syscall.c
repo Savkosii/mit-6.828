@@ -156,3 +156,17 @@ sys_time_msec(void)
 {
 	return (unsigned int) syscall(SYS_time_msec, 0, 0, 0, 0, 0, 0);
 }
+
+
+int
+sys_transmit_packet(void *va, size_t n)
+{
+	return syscall(SYS_transmit_packet, 0, (uintptr_t)va, n, 0, 0, 0);
+}
+
+
+ssize_t
+sys_recv_packet(void *va, size_t max_n)
+{
+	return syscall(SYS_recv_packet, 0, (uintptr_t)va, max_n, 0, 0, 0);
+}

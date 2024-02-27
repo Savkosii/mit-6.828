@@ -89,6 +89,7 @@ KERN_BINFILES +=	user/faultio\
 			user/spawnhello \
 			user/icode \
             user/exechello \
+            user/transmitpacket \
 			fs/fs
 
 # Binary files for LAB6
